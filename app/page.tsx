@@ -1,12 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowLeft, ArrowRight, BarChart3, BookOpen, Bot, Check, CheckCircle2, ChevronRight, Clock3, FileQuestion, GraduationCap, LayoutDashboard, LogOut, Menu, MoreHorizontal, Plus, Search, Send, Sparkles, Users, WandSparkles, X, Zap } from 'lucide-react';
+import { ArrowLeft, ArrowRight, BarChart3, BookOpen, Bot, Check, CheckCircle2, ChevronRight, Clock3, FileQuestion, GraduationCap, LayoutDashboard, LogOut, Menu, MoreHorizontal, Plus, Search, Send, Sparkles, Users, WandSparkles, X, Zap, LogIn, User as UserIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useAuth, UserRole } from '@/hooks/use-auth';
+import { AuthModal } from '@/components/auth/AuthModal';
 
 type Role = 'teacher' | 'student';
 type View = 'dashboard' | 'classroom' | 'quiz';
@@ -22,25 +24,180 @@ function Brand() {
 }
 
 function RoleGate({ onSelect }: { onSelect: (role: Role) => void }) {
-  return <main className="gate-page">
-    <nav className="gate-nav"><Brand /><span className="sdg-pill">SDG 4 · Quality Education</span></nav>
-    <section className="gate-copy"><div className="eyebrow"><Sparkles /> Learn better, together</div><h1>One classroom.<br/><span>Every learner seen.</span></h1><p>Adaptive learning support that helps teachers teach smarter and gives every student a fair path forward.</p></section>
-    <section className="role-panel"><div className="role-panel-head"><span>Welcome back</span><h2>How are you joining today?</h2></div>
-      <button className="role-card teacher-role" onClick={() => onSelect('teacher')}><span className="role-icon"><GraduationCap /></span><span><b>I’m a teacher</b><small>Create classrooms, guide learners & build smarter quizzes</small></span><ArrowRight /></button>
-      <button className="role-card student-role" onClick={() => onSelect('student')}><span className="role-icon"><BookOpen /></span><span><b>I’m a student</b><small>Join a classroom, learn at your pace & track progress</small></span><ArrowRight /></button>
-      <p className="demo-note"><Zap /> Interactive hackathon prototype · no password needed</p>
-    </section><div className="orb orb-one"/><div className="orb orb-two"/>
-  </main>;
+  const { user, userRole, setUserRole, logout } = useAuth();
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [targetRole, setTargetRole] = useState<Role>('student');
+
+  const handleRoleChoice = async (role: Role) => {
+    setTargetRole(role);
+    if (!user) {
+      setShowAuthModal(true);
+    } else {
+      await setUserRole(role);
+      onSelect(role);
+    }
+  };
+
+  return (
+    <main className="gate-page">
+      <nav className="gate-nav">
+        <Brand />
+        <div className="flex items-center gap-3">
+          <span className="sdg-pill hidden sm:inline-block">SDG 4 · Quality Education</span>
+          {user ? (
+            <div className="flex items-center gap-2 bg-white border border-[#e5dfd6] rounded-full px-3 py-1.5 text-xs text-[#111] shadow-sm">
+              {user.photoURL ? (
+                <img src={user.photoURL} alt={user.displayName || 'User'} className="w-5 h-5 rounded-full object-cover border border-[#e5dfd6]" />
+              ) : (
+                <div className="w-5 h-5 rounded-full bg-[#f1ece5] text-[#111] flex items-center justify-center font-bold text-[10px]">
+                  {user.displayName ? user.displayName[0].toUpperCase() : 'U'}
+                </div>
+              )}
+              <span className="max-w-[120px] truncate font-semibold">{user.displayName || user.email?.split('@')[0]}</span>
+              <button onClick={logout} className="ml-1 text-[#8c857b] hover:text-[#111] transition-colors" title="Sign Out">
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <Button 
+              onClick={() => setShowAuthModal(true)} 
+              variant="outline" 
+              className="border-[#e5dfd6] bg-white hover:bg-[#faf8f5] text-[#111] text-xs font-semibold rounded-full h-8 px-3.5 gap-1.5 shadow-sm"
+            >
+              <LogIn className="w-3.5 h-3.5" /> Sign In
+            </Button>
+          )}
+        </div>
+      </nav>
+
+      <section className="gate-copy">
+        <div className="eyebrow"><Sparkles /> Learn better, together</div>
+        <h1>One classroom.<br/><span>Every learner seen.</span></h1>
+        <p>Adaptive learning support that helps teachers teach smarter and gives every student a fair path forward.</p>
+      </section>
+
+      <section className="role-panel">
+        <div className="role-panel-head">
+          <span>{user ? `Welcome back, ${user.displayName || user.email?.split('@')[0]}` : 'Welcome back'}</span>
+          <h2>How are you joining today?</h2>
+        </div>
+        <button className="role-card teacher-role" onClick={() => handleRoleChoice('teacher')}>
+          <span className="role-icon"><GraduationCap /></span>
+          <span><b>I’m a teacher</b><small>Create classrooms, guide learners & build smarter quizzes</small></span>
+          <ArrowRight />
+        </button>
+        <button className="role-card student-role" onClick={() => handleRoleChoice('student')}>
+          <span className="role-icon"><BookOpen /></span>
+          <span><b>I’m a student</b><small>Join a classroom, learn at your pace & track progress</small></span>
+          <ArrowRight />
+        </button>
+        
+        {!user ? (
+          <button 
+            onClick={() => onSelect('student')} 
+            className="demo-note text-[#706a63] hover:text-[#111] transition-colors text-xs inline-flex items-center gap-1.5 justify-center w-full mt-3"
+          >
+            <Zap className="w-3.5 h-3.5 text-amber-500" /> Demo mode · preview without sign in
+          </button>
+        ) : (
+          <p className="demo-note text-[#166534]"><CheckCircle2 className="w-3.5 h-3.5 text-[#16a34a]" /> Signed in with Firebase Auth</p>
+        )}
+      </section>
+
+      <Dialog open={showAuthModal} onOpenChange={setShowAuthModal}>
+        <DialogContent className="p-0 bg-transparent border-none max-w-md">
+          <AuthModal 
+            initialRole={targetRole} 
+            onSuccess={() => {
+              setShowAuthModal(false);
+              onSelect(userRole || targetRole);
+            }} 
+          />
+        </DialogContent>
+      </Dialog>
+
+      <div className="orb orb-one"/>
+      <div className="orb orb-two"/>
+    </main>
+  );
 }
 
 function AppShell({ role, onExit, children, active = 'dashboard' }: { role: Role; onExit: () => void; children: React.ReactNode; active?: View }) {
-  return <div className="app-shell"><aside className="sidebar"><Brand /><nav>
-    <a className={active === 'dashboard' ? 'active' : ''}><LayoutDashboard/> Overview</a><a className={active === 'classroom' ? 'active' : ''}><BookOpen/> Classrooms <span>3</span></a>{role === 'teacher' && <a className={active === 'quiz' ? 'active' : ''}><FileQuestion/> Quiz studio</a>}<a><BarChart3/> Progress</a>
-  </nav><div className="sidebar-foot"><div className="mini-profile"><span>{role === 'teacher' ? 'AA' : 'NH'}</span><div><b>{role === 'teacher' ? 'Cikgu Aina' : 'Nur Huda'}</b><small>{role}</small></div></div><button onClick={onExit} aria-label="Log out"><LogOut/></button></div></aside><div className="mobile-bar"><Brand/><Menu/></div><section className="main-stage">{children}</section></div>;
+  const { user, logout } = useAuth();
+
+  const handleLogout = async () => {
+    if (user) {
+      await logout();
+    }
+    onExit();
+  };
+
+  const getInitials = () => {
+    if (user?.displayName) {
+      return user.displayName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+    }
+    if (user?.email) {
+      return user.email.substring(0, 2).toUpperCase();
+    }
+    return role === 'teacher' ? 'AA' : 'NH';
+  };
+
+  const getUserName = () => {
+    if (user?.displayName) return user.displayName;
+    if (user?.email) return user.email.split('@')[0];
+    return role === 'teacher' ? 'Cikgu Aina' : 'Nur Huda';
+  };
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <Brand />
+        <nav>
+          <a className={active === 'dashboard' ? 'active' : ''}><LayoutDashboard/> Overview</a>
+          <a className={active === 'classroom' ? 'active' : ''}><BookOpen/> Classrooms <span>3</span></a>
+          {role === 'teacher' && <a className={active === 'quiz' ? 'active' : ''}><FileQuestion/> Quiz studio</a>}
+          <a><BarChart3/> Progress</a>
+        </nav>
+        <div className="sidebar-foot">
+          <div className="mini-profile">
+            {user?.photoURL ? (
+              <img src={user.photoURL} alt={getUserName()} className="w-8 h-8 rounded-full object-cover border border-slate-700" />
+            ) : (
+              <span>{getInitials()}</span>
+            )}
+            <div>
+              <b>{getUserName()}</b>
+              <small>{role}</small>
+            </div>
+          </div>
+          <button onClick={handleLogout} aria-label="Log out" title="Sign Out"><LogOut/></button>
+        </div>
+      </aside>
+      <div className="mobile-bar"><Brand/><Menu/></div>
+      <section className="main-stage">{children}</section>
+    </div>
+  );
 }
 
 function Topbar({ role, onSwitch }: { role: Role; onSwitch: (r: Role) => void }) {
-  return <header className="topbar"><div><span className="today">Friday, 5 September</span><h1>{role === 'teacher' ? 'Good morning, Cikgu Aina.' : 'Ready to learn, Huda?'}</h1></div><div className="top-actions"><label><Search/><input placeholder="Search"/></label><div className="view-switch"><button className={role==='teacher'?'active':''} onClick={()=>onSwitch('teacher')}>Teacher</button><button className={role==='student'?'active':''} onClick={()=>onSwitch('student')}>Student</button></div></div></header>;
+  const { user } = useAuth();
+  const displayName = user?.displayName ? user.displayName.split(' ')[0] : (user?.email ? user.email.split('@')[0] : (role === 'teacher' ? 'Cikgu Aina' : 'Huda'));
+
+  return (
+    <header className="topbar">
+      <div>
+        <span className="today">Friday, 5 September</span>
+        <h1>{role === 'teacher' ? `Good morning, ${displayName}.` : `Ready to learn, ${displayName}?`}</h1>
+      </div>
+      <div className="top-actions">
+        <label><Search/><input placeholder="Search"/></label>
+        <div className="view-switch">
+          <button className={role==='teacher'?'active':''} onClick={()=>onSwitch('teacher')}>Teacher</button>
+          <button className={role==='student'?'active':''} onClick={()=>onSwitch('student')}>Student</button>
+        </div>
+      </div>
+    </header>
+  );
 }
 
 function TeacherDashboard({ onSwitch, onView, onExit }: { onSwitch: (r: Role)=>void; onView: (v: View)=>void; onExit:()=>void }) {
@@ -82,21 +239,58 @@ function QuizBuilder({ onBack, onExit }: { onBack:()=>void; onExit:()=>void }) {
 }
 
 export default function Home() {
-  const [role,setRole]=useState<Role|null>(null); const [view,setView]=useState<View>('dashboard'); const choose=(r:Role)=>{setRole(r);setView('dashboard')}; const exit=()=>setRole(null);
-  useEffect(()=>{
-    const lifecycle=new AbortController();
-    const context=(document as unknown as {modelContext?:{registerTool:(tool:unknown,options:{signal:AbortSignal})=>void|Promise<void>}}).modelContext;
-    if(!context?.registerTool)return;
+  const { user, userRole, loading } = useAuth();
+  const [role, setRole] = useState<Role | null>(null); 
+  const [view, setView] = useState<View>('dashboard');
+
+  useEffect(() => {
+    if (user && userRole) {
+      setRole(userRole);
+    }
+  }, [user, userRole]);
+
+  const choose = (r: Role) => {
+    setRole(r);
+    setView('dashboard');
+  };
+
+  const exit = () => {
+    setRole(null);
+  };
+
+  useEffect(() => {
+    const lifecycle = new AbortController();
+    const context = (document as unknown as {modelContext?:{registerTool:(tool:unknown,options:{signal:AbortSignal})=>void|Promise<void>}}).modelContext;
+    if (!context?.registerTool) return;
     void Promise.resolve(context.registerTool({
-      name:'open_learning_dashboard',title:'Open learning dashboard',description:'Open the Lumina dashboard for a teacher or student and reset to its overview.',
-      inputSchema:{type:'object',properties:{role:{type:'string',enum:['teacher','student']}},required:['role'],additionalProperties:false},
-      annotations:{readOnlyHint:false,untrustedContentHint:false},
-      execute(input:unknown){const value=(input as {role?:unknown})?.role;if(value!=='teacher'&&value!=='student')throw new Error('role must be teacher or student');setRole(value);setView('dashboard');return{role:value,view:'dashboard'};}
-    },{signal:lifecycle.signal})).catch(()=>{});
-    return()=>lifecycle.abort();
-  },[]);
-  if(!role) return <RoleGate onSelect={choose}/>;
-  if(view==='classroom') return <Classroom role={role} onBack={()=>setView('dashboard')} onQuiz={()=>setView('quiz')} onExit={exit}/>;
-  if(view==='quiz') return <QuizBuilder onBack={()=>setView('classroom')} onExit={exit}/>;
-  return role==='teacher'?<TeacherDashboard onSwitch={choose} onView={setView} onExit={exit}/>:<StudentDashboard onSwitch={choose} onView={setView} onExit={exit}/>;
+      name: 'open_learning_dashboard',
+      title: 'Open learning dashboard',
+      description: 'Open the Lumina dashboard for a teacher or student and reset to its overview.',
+      inputSchema: { type: 'object', properties: { role: { type: 'string', enum: ['teacher', 'student'] } }, required: ['role'], additionalProperties: false },
+      annotations: { readOnlyHint: false, untrustedContentHint: false },
+      execute(input: unknown) {
+        const value = (input as {role?: unknown})?.role;
+        if (value !== 'teacher' && value !== 'student') throw new Error('role must be teacher or student');
+        setRole(value);
+        setView('dashboard');
+        return { role: value, view: 'dashboard' };
+      }
+    }, { signal: lifecycle.signal })).catch(() => {});
+    return () => lifecycle.abort();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-300 gap-3">
+        <div className="w-8 h-8 border-2 border-lime-400 border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-sm font-medium">Loading Lumina...</p>
+      </div>
+    );
+  }
+
+  if (!role) return <RoleGate onSelect={choose}/>;
+  if (view === 'classroom') return <Classroom role={role} onBack={() => setView('dashboard')} onQuiz={() => setView('quiz')} onExit={exit}/>;
+  if (view === 'quiz') return <QuizBuilder onBack={() => setView('classroom')} onExit={exit}/>;
+  return role === 'teacher' ? <TeacherDashboard onSwitch={choose} onView={setView} onExit={exit}/> : <StudentDashboard onSwitch={choose} onView={setView} onExit={exit}/>;
 }
+
