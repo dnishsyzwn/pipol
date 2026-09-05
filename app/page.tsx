@@ -63,6 +63,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
+import { toast } from '@/components/ui/toast';
 import {
   Dialog,
   DialogContent,
@@ -228,6 +229,14 @@ const friendlyError = (e: unknown) => {
   }
   return 'Something went wrong. Please try again.';
 };
+
+function aiErrorDetails(error: unknown) {
+  const value = error as { code?: unknown; message?: unknown };
+  const rawCode = typeof value?.code === 'string' ? value.code : 'AI_GENERATION_FAILED';
+  const code = rawCode.replace(/^functions\//, '').replace(/[^a-zA-Z0-9_-]/g, '_').toUpperCase();
+  const message = friendlyError(error);
+  return { code, message, copyText: `SLearn AI error ${code}\n${message}` };
+}
 
 function formatDeadline(deadlineStr?: string | null): {
   formatted: string;
@@ -4682,7 +4691,6 @@ function QuizBuilder({
   const [imageCount, setImageCount] = useState(0);
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | 'mixed'>('medium');
   const [generating, setGenerating] = useState(false);
-  const [generationStatus, setGenerationStatus] = useState('');
   const [quota, setQuota] = useState({ questionsUsed: 0, imagesUsed: 0 });
   const [quickGenerateIndex, setQuickGenerateIndex] = useState<number | null>(null);
   const [quickPrompt, setQuickPrompt] = useState('');
@@ -4800,10 +4808,16 @@ function QuizBuilder({
   const generateWithAi = async () => {
     const remainingQuestions = Math.max(0, 15 - quota.questionsUsed);
     const remainingImages = Math.max(0, 5 - quota.imagesUsed);
-    if (!aiPrompt.trim() && sourceFiles.length === 0) { setGenerationStatus('Add instructions or at least one source file.'); return; }
-    if (questionCount > remainingQuestions || imageCount > remainingImages) { setGenerationStatus('This request is above your remaining shared quota.'); return; }
+    if (!aiPrompt.trim() && sourceFiles.length === 0) {
+      toast.add({ title: 'Add quiz content', description: 'Enter instructions or attach at least one source file.', type: 'warning' });
+      return;
+    }
+    if (questionCount > remainingQuestions || imageCount > remainingImages) {
+      toast.add({ title: 'Quota exceeded', description: 'This request is above your remaining shared AI quota.', type: 'warning' });
+      return;
+    }
     setGenerating(true);
-    setGenerationStatus('Uploading and checking your learning materials…');
+    const loadingToastId = toast.add({ title: 'Preparing your quiz', description: 'Uploading and checking your learning materials…', type: 'loading', timeout: 0 });
     try {
       const materialIds: string[] = [];
       for (const file of sourceFiles) {
@@ -4812,7 +4826,7 @@ function QuizBuilder({
         await uploadBytes(ref(storage, material.storagePath), file, { contentType: file.type || 'text/plain' });
         materialIds.push(material.materialId);
       }
-      setGenerationStatus('Gemini is creating your draft…');
+      toast.update(loadingToastId, { title: 'Gemini is creating your draft', description: `Generating ${questionCount} editable question${questionCount === 1 ? '' : 's'}…`, type: 'loading', timeout: 0 });
       const creation = await httpsCallable(functions, 'createQuizGenerationJob')({
         classroomId: classroom.id,
         title: title.trim() || 'AI-generated exercise',
@@ -4840,9 +4854,22 @@ function QuizBuilder({
       setQuestions(generated.map((question, index) => ({ id: question.id || `ai-${index}`, question: question.question, answer: question.correctAnswer, points: 2, enhanced: true, difficulty: question.difficulty })));
       if (!title.trim() && draft.data()?.title) setTitle(String(draft.data()?.title));
       const inferredLevel = String(draft.data()?.level || 'General education');
-      setGenerationStatus(`Draft ready for ${inferredLevel}: ${generated.length} questions${imageCount ? ` and ${imageCount} images` : ''}. Review before publishing.`);
+      toast.close(loadingToastId);
+      toast.add({ title: 'Draft ready', description: `${inferredLevel} · ${generated.length} questions${imageCount ? ` · ${imageCount} images` : ''}. Review everything before publishing.`, type: 'success', timeout: 8000 });
     } catch (error) {
-      setGenerationStatus(error instanceof Error ? error.message : 'AI generation failed.');
+      toast.close(loadingToastId);
+      const details = aiErrorDetails(error);
+      toast.add({
+        title: `Generation failed · ${details.code}`,
+        description: details.message,
+        type: 'error',
+        timeout: 0,
+        priority: 'high',
+        actionProps: {
+          children: <><Copy /> Copy details</>,
+          onClick: () => void navigator.clipboard.writeText(details.copyText),
+        },
+      });
     } finally {
       setGenerating(false);
     }
@@ -5111,7 +5138,6 @@ function QuizBuilder({
           <label className="form-label">AI-generated images<Input type="number" min={0} max={Math.min(5, Math.max(0, 5 - quota.imagesUsed))} value={imageCount} onChange={(event) => setImageCount(Math.max(0, Math.min(5, Number(event.target.value) || 0)))}/></label>
           <Button type="button" onClick={generateWithAi} disabled={generating || questionCount > Math.max(0, 15 - quota.questionsUsed) || imageCount > Math.max(0, 5 - quota.imagesUsed)} className="primary-action">{generating ? <LoaderCircle/> : <WandSparkles/>}{generating ? 'Generating draft…' : 'Generate editable draft'}</Button>
         </div>
-        {generationStatus && <p style={{ margin: '.8rem 0 0', color: generationStatus.includes('failed') || generationStatus.includes('above') ? '#a33' : '#315b42', fontWeight: 600 }}>{generationStatus}</p>}
       </section>
       <div className="builder-grid">
         <section

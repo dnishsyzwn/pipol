@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Montserrat } from 'next/font/google';
+import { Toaster } from '@/components/ui/toast';
 import './globals.css';
 
 const montserrat = Montserrat({
@@ -25,6 +26,7 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         {children}
+        <Toaster limit={4} />
       </body>
     </html>
   );
