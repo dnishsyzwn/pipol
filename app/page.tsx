@@ -84,7 +84,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { auth, db, functions, googleProvider, initializeSlearnAppCheck, storage } from '@/lib/firebase';
-import { curriculumFor, SCHOOL_STAGES, SCHOOL_YEARS, subjectsFor, type SchoolStage } from '@/lib/malaysia-curriculum';
+import { curriculumFor, resolveCurriculumSelection, SCHOOL_STAGES, SCHOOL_YEARS, subjectsFor, type SchoolStage } from '@/lib/malaysia-curriculum';
 import { ClassroomsDetail, ProgressDetail } from './detail-pages';
 
 type Role = 'teacher' | 'student';
@@ -100,6 +100,10 @@ type ClassroomData = {
   students: number;
   maxStudents?: number;
   progress: number;
+  subjectName?: string;
+  schoolStage?: SchoolStage;
+  schoolYear?: string;
+  curriculum?: string;
 };
 type JoinRequest = {
   id: string;
@@ -951,6 +955,8 @@ function TeacherDashboard({
     [error, setError] = useState('');
   const [editTarget, setEditTarget] = useState<ClassroomData | null>(null),
     [editName, setEditName] = useState(''),
+    [editSchoolStage, setEditSchoolStage] = useState<SchoolStage>('primary'),
+    [editSchoolYear, setEditSchoolYear] = useState('Tahun 1'),
     [editSubject, setEditSubject] = useState(''),
     [editMaxStudents, setEditMaxStudents] = useState('30'),
     [savingEdit, setSavingEdit] = useState(false),
@@ -960,6 +966,8 @@ function TeacherDashboard({
     [deleteError, setDeleteError] = useState('');
   const availableSubjects = subjectsFor(schoolStage, schoolYear);
   const subjectGroups = [...new Set(availableSubjects.map((subject) => subject.category))];
+  const editAvailableSubjects = subjectsFor(editSchoolStage, editSchoolYear);
+  const editSubjectGroups = [...new Set(editAvailableSubjects.map((subject) => subject.category))];
 
   useEffect(
     () =>
@@ -1035,15 +1043,18 @@ function TeacherDashboard({
   };
 
   const openEdit = (c: ClassroomData) => {
+    const selection = resolveCurriculumSelection(c);
     setEditTarget(c);
     setEditName(c.name);
-    setEditSubject(c.subject || '');
+    setEditSchoolStage(selection.stage);
+    setEditSchoolYear(selection.schoolYear);
+    setEditSubject(selection.subject);
     setEditMaxStudents(String(c.maxStudents || 30));
     setEditError('');
   };
 
   const saveEdit = async () => {
-    if (!editTarget || !editName.trim() || !editSubject.trim()) return;
+    if (!editTarget || !editName.trim() || !editSubject) return;
     const maxCap = parseInt(editMaxStudents, 10) || 30;
     if (maxCap < (editTarget.students || 0)) {
       setEditError(
@@ -1058,7 +1069,11 @@ function TeacherDashboard({
       const batch = writeBatch(db);
       batch.update(doc(db, 'classrooms', classId), {
         name: editName.trim(),
-        subject: editSubject.trim(),
+        subject: `${editSubject} · ${editSchoolYear}`,
+        subjectName: editSubject,
+        schoolStage: editSchoolStage,
+        schoolYear: editSchoolYear,
+        curriculum: curriculumFor(editSchoolStage),
         maxStudents: maxCap,
         updatedAt: serverTimestamp(),
       });
@@ -1527,13 +1542,27 @@ function TeacherDashboard({
               onChange={(e) => setEditName(e.target.value)}
             />
           </label>
+          <div className="curriculum-fields">
+            <label className="form-label">
+              School level
+              <NativeSelect className="curriculum-select" value={editSchoolStage} onChange={(e) => { const stage=e.target.value as SchoolStage; setEditSchoolStage(stage); setEditSchoolYear(SCHOOL_YEARS[stage][0]); setEditSubject(''); }}>
+                {SCHOOL_STAGES.map((stage) => <NativeSelectOption key={stage.value} value={stage.value}>{stage.label}</NativeSelectOption>)}
+              </NativeSelect>
+            </label>
+            <label className="form-label">
+              Year / form
+              <NativeSelect className="curriculum-select" value={editSchoolYear} onChange={(e) => { setEditSchoolYear(e.target.value); setEditSubject(''); }}>
+                {SCHOOL_YEARS[editSchoolStage].map((year) => <NativeSelectOption key={year} value={year}>{year}</NativeSelectOption>)}
+              </NativeSelect>
+            </label>
+          </div>
           <label className="form-label">
-            Subject
-            <Input
-              placeholder="e.g. Mathematics"
-              value={editSubject}
-              onChange={(e) => setEditSubject(e.target.value)}
-            />
+            KPM subject
+            <Combobox value={editSubject || null} onValueChange={(value) => setEditSubject(String(value || ''))} items={editAvailableSubjects.map((subject) => subject.name)}>
+              <ComboboxInput className="curriculum-combobox" placeholder="Search a subject, e.g. Fizik" showClear />
+              <ComboboxContent><ComboboxEmpty>No matching subject for this level.</ComboboxEmpty><ComboboxList>{editSubjectGroups.map((group) => <ComboboxGroup key={group}><ComboboxLabel>{group}</ComboboxLabel>{editAvailableSubjects.filter((subject) => subject.category === group).map((subject) => <ComboboxItem key={subject.name} value={subject.name}>{subject.name}</ComboboxItem>)}</ComboboxGroup>)}</ComboboxList></ComboboxContent>
+            </Combobox>
+            <small className="curriculum-note">{curriculumFor(editSchoolStage)} · Existing legacy subjects can be replaced with a verified KPM option.</small>
           </label>
           <label className="form-label">
             Student capacity (Max learners)
@@ -1559,7 +1588,7 @@ function TeacherDashboard({
             </Button>
             <Button
               onClick={saveEdit}
-              disabled={savingEdit || !editName.trim() || !editSubject.trim()}
+              disabled={savingEdit || !editName.trim() || !editSubject}
             >
               {savingEdit ? <LoaderCircle /> : <Check />} Save changes
             </Button>
@@ -2013,6 +2042,7 @@ function Classroom({
   onClassUpdated?: (c: ClassroomData) => void;
   onClassDeleted?: () => void;
 }) {
+  const initialCurriculumSelection = resolveCurriculumSelection(classroom);
   const [currentClass, setCurrentClass] = useState<ClassroomData>(classroom);
   const [exercises, setExercises] = useState<
     {
@@ -2028,7 +2058,9 @@ function Classroom({
   >([]);
   const [editOpen, setEditOpen] = useState(false),
     [editName, setEditName] = useState(classroom.name),
-    [editSubject, setEditSubject] = useState(classroom.subject || ''),
+    [editSchoolStage, setEditSchoolStage] = useState<SchoolStage>(initialCurriculumSelection.stage),
+    [editSchoolYear, setEditSchoolYear] = useState(initialCurriculumSelection.schoolYear),
+    [editSubject, setEditSubject] = useState(initialCurriculumSelection.subject),
     [editMaxStudents, setEditMaxStudents] = useState(
       String(classroom.maxStudents || 30),
     ),
@@ -2037,6 +2069,8 @@ function Classroom({
   const [deleteOpen, setDeleteOpen] = useState(false),
     [deleting, setDeleting] = useState(false),
     [deleteError, setDeleteError] = useState('');
+  const editAvailableSubjects = subjectsFor(editSchoolStage, editSchoolYear);
+  const editSubjectGroups = [...new Set(editAvailableSubjects.map((subject) => subject.category))];
 
   useEffect(
     () =>
@@ -2058,7 +2092,7 @@ function Classroom({
   );
 
   const saveEdit = async () => {
-    if (!editName.trim() || !editSubject.trim()) return;
+    if (!editName.trim() || !editSubject) return;
     const maxCap = parseInt(editMaxStudents, 10) || 30;
     if (maxCap < (currentClass.students || 0)) {
       setEditError(
@@ -2073,7 +2107,11 @@ function Classroom({
       const batch = writeBatch(db);
       batch.update(doc(db, 'classrooms', classId), {
         name: editName.trim(),
-        subject: editSubject.trim(),
+        subject: `${editSubject} · ${editSchoolYear}`,
+        subjectName: editSubject,
+        schoolStage: editSchoolStage,
+        schoolYear: editSchoolYear,
+        curriculum: curriculumFor(editSchoolStage),
         maxStudents: maxCap,
         updatedAt: serverTimestamp(),
       });
@@ -2441,8 +2479,11 @@ function Classroom({
               variant="outline"
               size="sm"
               onClick={() => {
+                const selection = resolveCurriculumSelection(currentClass);
                 setEditName(currentClass.name);
-                setEditSubject(currentClass.subject || '');
+                setEditSchoolStage(selection.stage);
+                setEditSchoolYear(selection.schoolYear);
+                setEditSubject(selection.subject);
                 setEditMaxStudents(String(currentClass.maxStudents || 30));
                 setEditError('');
                 setEditOpen(true);
@@ -3477,13 +3518,27 @@ function Classroom({
               onChange={(e) => setEditName(e.target.value)}
             />
           </label>
+          <div className="curriculum-fields">
+            <label className="form-label">
+              School level
+              <NativeSelect className="curriculum-select" value={editSchoolStage} onChange={(e) => { const stage=e.target.value as SchoolStage; setEditSchoolStage(stage); setEditSchoolYear(SCHOOL_YEARS[stage][0]); setEditSubject(''); }}>
+                {SCHOOL_STAGES.map((stage) => <NativeSelectOption key={stage.value} value={stage.value}>{stage.label}</NativeSelectOption>)}
+              </NativeSelect>
+            </label>
+            <label className="form-label">
+              Year / form
+              <NativeSelect className="curriculum-select" value={editSchoolYear} onChange={(e) => { setEditSchoolYear(e.target.value); setEditSubject(''); }}>
+                {SCHOOL_YEARS[editSchoolStage].map((year) => <NativeSelectOption key={year} value={year}>{year}</NativeSelectOption>)}
+              </NativeSelect>
+            </label>
+          </div>
           <label className="form-label">
-            Subject
-            <Input
-              placeholder="e.g. Mathematics"
-              value={editSubject}
-              onChange={(e) => setEditSubject(e.target.value)}
-            />
+            KPM subject
+            <Combobox value={editSubject || null} onValueChange={(value) => setEditSubject(String(value || ''))} items={editAvailableSubjects.map((subject) => subject.name)}>
+              <ComboboxInput className="curriculum-combobox" placeholder="Search a subject, e.g. Fizik" showClear />
+              <ComboboxContent><ComboboxEmpty>No matching subject for this level.</ComboboxEmpty><ComboboxList>{editSubjectGroups.map((group) => <ComboboxGroup key={group}><ComboboxLabel>{group}</ComboboxLabel>{editAvailableSubjects.filter((subject) => subject.category === group).map((subject) => <ComboboxItem key={subject.name} value={subject.name}>{subject.name}</ComboboxItem>)}</ComboboxGroup>)}</ComboboxList></ComboboxContent>
+            </Combobox>
+            <small className="curriculum-note">{curriculumFor(editSchoolStage)} · Choose a verified subject for {editSchoolYear}.</small>
           </label>
           <label className="form-label">
             Student capacity (Max learners)
@@ -3509,7 +3564,7 @@ function Classroom({
             </Button>
             <Button
               onClick={saveEdit}
-              disabled={savingEdit || !editName.trim() || !editSubject.trim()}
+              disabled={savingEdit || !editName.trim() || !editSubject}
             >
               {savingEdit ? <LoaderCircle /> : <Check />} Save changes
             </Button>

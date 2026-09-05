@@ -217,3 +217,40 @@ export function subjectsFor(
 export function curriculumFor(stage: SchoolStage) {
   return SCHOOL_STAGES.find((item) => item.value === stage)?.curriculum ?? '';
 }
+
+const SUBJECT_ALIASES: Record<string, string> = {
+  mathematics: 'Matematik',
+  math: 'Matematik',
+  physics: 'Fizik',
+  chemistry: 'Kimia',
+  biology: 'Biologi',
+  science: 'Sains',
+  history: 'Sejarah',
+  geography: 'Geografi',
+  economics: 'Ekonomi',
+  business: 'Perniagaan',
+  accounting: 'Prinsip Perakaunan',
+};
+
+export function resolveCurriculumSelection(classroom: {
+  subject?: string;
+  subjectName?: string;
+  schoolStage?: SchoolStage;
+  schoolYear?: string;
+}) {
+  const rawSubject = (classroom.subjectName || classroom.subject || '').split('·')[0].trim();
+  const mappedSubject = SUBJECT_ALIASES[rawSubject.toLowerCase()] || rawSubject;
+  const rawLabel = `${classroom.subject || ''} ${classroom.schoolYear || ''}`;
+  const formMatch = rawLabel.match(/(?:Form|Tingkatan)\s*([1-5])/i);
+  const yearMatch = rawLabel.match(/(?:Year|Tahun)\s*([1-6])/i);
+  const stage: SchoolStage = classroom.schoolStage || (formMatch ? 'secondary' : 'primary');
+  const fallbackYear = SCHOOL_YEARS[stage][0];
+  const schoolYear = classroom.schoolYear || (formMatch ? `Tingkatan ${formMatch[1]}` : yearMatch ? `Tahun ${yearMatch[1]}` : fallbackYear);
+  const validSubjects = subjectsFor(stage, schoolYear).map((subject) => subject.name);
+  return {
+    stage,
+    schoolYear,
+    subject: validSubjects.includes(mappedSubject) ? mappedSubject : '',
+    legacySubject: validSubjects.includes(mappedSubject) ? '' : rawSubject,
+  };
+}
