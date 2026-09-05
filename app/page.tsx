@@ -70,9 +70,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { auth, db, functions, googleProvider, storage } from '@/lib/firebase';
+import { ClassroomsDetail, ProgressDetail } from './detail-pages';
 
 type Role = 'teacher' | 'student';
-type View = 'dashboard' | 'classroom' | 'quiz' | 'exercise';
+type View = 'dashboard' | 'classes' | 'progress' | 'classroom' | 'quiz' | 'exercise';
 type ClassroomData = {
   id: string;
   name: string;
@@ -509,7 +510,7 @@ function AppShell({
             <span>Overview</span>
           </button>
           <button
-            className={active === 'classroom' || active === 'quiz' || active === 'exercise' ? 'active' : ''}
+            className={active === 'classes' || active === 'classroom' || active === 'quiz' || active === 'exercise' ? 'active' : ''}
             onClick={() => go('classes')}
             title="Classrooms"
           >
@@ -517,7 +518,7 @@ function AppShell({
             <span>Classrooms</span>
             <b>{classCount}</b>
           </button>
-          <button onClick={() => go('progress')} title="Progress">
+          <button className={active === 'progress' ? 'active' : ''} onClick={() => go('progress')} title="Progress">
             <BarChart3 />
             <span>Progress</span>
           </button>
@@ -4752,6 +4753,7 @@ export default function Home() {
     [view, setView] = useState<View>('dashboard'),
     [selectedClass, setSelectedClass] = useState<ClassroomData | null>(null),
     [selectedExercise, setSelectedExercise] = useState<any | null>(null),
+    [detailCount, setDetailCount] = useState(0),
     [, setProfileVersion] = useState(0);
   useEffect(
     () =>
@@ -4766,7 +4768,7 @@ export default function Home() {
     [],
   );
   useEffect(() => {
-    const navigate = (event: Event) => { const target = (event as CustomEvent<NavTarget>).detail; setView('dashboard'); setSelectedClass(null); setSelectedExercise(null); setTimeout(() => { if (target === 'overview') window.scrollTo({ top: 0, behavior: 'smooth' }); else document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 40); };
+    const navigate = (event: Event) => { const target = (event as CustomEvent<NavTarget>).detail; setView(target === 'overview' ? 'dashboard' : target); setSelectedClass(null); setSelectedExercise(null); window.scrollTo({ top: 0, behavior: 'smooth' }); };
     const refreshProfile = () => setProfileVersion((version) => version + 1);
     window.addEventListener('slearn:navigate', navigate);
     window.addEventListener('slearn:profile-updated', refreshProfile);
@@ -4868,6 +4870,24 @@ export default function Home() {
         onLogin={() => authenticate(null, 'login')}
       />
     );
+  const openDetailedClass = (classroom: ClassroomData) => {
+    setSelectedClass(classroom);
+    setView('classroom');
+  };
+  if (view === 'classes')
+    return (
+      <AppShell role={role} user={user} onExit={logout} active="classes" classCount={detailCount}>
+        <Topbar role={role} user={user} />
+        <ClassroomsDetail role={role} user={user} onOpen={openDetailedClass} onCountChange={setDetailCount} />
+      </AppShell>
+    );
+  if (view === 'progress')
+    return (
+      <AppShell role={role} user={user} onExit={logout} active="progress" classCount={detailCount}>
+        <Topbar role={role} user={user} />
+        <ProgressDetail role={role} user={user} onOpen={openDetailedClass} onCountChange={setDetailCount} />
+      </AppShell>
+    );
   if (view === 'exercise' && selectedClass && selectedExercise)
     return (
       <StudentExerciseRunner
@@ -4884,7 +4904,7 @@ export default function Home() {
         role={role}
         user={user}
         classroom={selectedClass}
-        onBack={() => setView('dashboard')}
+        onBack={() => setView('classes')}
         onQuiz={() => setView('quiz')}
         onStartExercise={(ex) => {
           setSelectedExercise(ex);
@@ -4894,7 +4914,7 @@ export default function Home() {
         onClassUpdated={setSelectedClass}
         onClassDeleted={() => {
           setSelectedClass(null);
-          setView('dashboard');
+          setView('classes');
         }}
       />
     );
