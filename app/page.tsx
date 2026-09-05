@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
-import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
 import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, increment, limit, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { AlertCircle, ArrowLeft, ArrowRight, BarChart3, BookOpen, Bot, Calendar, Check, CheckCircle2, ChevronRight, Clock3, Copy, FileQuestion, GraduationCap, LayoutDashboard, LoaderCircle, Lock, LogIn, LogOut, Menu, MoreHorizontal, Pencil, Plus, Search, Send, Sparkles, Trash2, Unlock, Users, WandSparkles, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowRight, BarChart3, BookOpen, Bot, Calendar, Check, CheckCircle2, ChevronRight, Clock3, Copy, FileQuestion, GraduationCap, LayoutDashboard, LoaderCircle, Lock, LogIn, LogOut, Mail, Menu, MoreHorizontal, Pencil, Plus, Search, Send, Sparkles, Trash2, Unlock, Users, WandSparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -21,10 +21,24 @@ type QuestionItem={id:string;question:string;answer:string;points:number;enhance
 type QuestionResult={questionIdx:number;questionText:string;expectedAnswer:string;studentAnswer:string;isCorrect:boolean;pointsEarned:number;pointsPossible:number};
 type SubmissionData={id:string;studentId:string;studentName:string;studentEmail:string;answers:Record<number,string>;score:number;totalPoints:number;totalCorrect:number;totalWrong:number;questionResults:QuestionResult[];isLate?:boolean;submittedAt?:any};
 type ExerciseAnalytics={totalAnswered:number;totalCorrect:number;totalWrong:number;accuracyRate:number;questionBreakdown:{questionIdx:number;questionText:string;expectedAnswer:string;correctCount:number;wrongCount:number;totalAnswers:number;accuracyRate:number}[];submissions:SubmissionData[]};
+type AuthParams={provider:'google'|'email';mode:'login'|'signup';role:Role|null;email?:string;password?:string;name?:string};
 const MAX_TEACHER_CLASSES = 3;
 const colours=['lime','blue','violet'];
 const initials=(name?:string|null)=>(name||'Learner').split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();
-const friendlyError=(e:unknown)=>e instanceof Error&&e.message.includes('popup-closed')?'Sign in cancelled. Try again when you’re ready.':'Something went wrong. Please try again.';
+const friendlyError=(e:unknown)=>{
+ if(e instanceof Error){
+  const msg=e.message;
+  if(msg.includes('popup-closed')||msg.includes('cancelled-popup-request'))return 'Sign in cancelled. Try again when you’re ready.';
+  if(msg.includes('email-already-in-use'))return 'This email is already registered. Please log in instead.';
+  if(msg.includes('invalid-credential')||msg.includes('wrong-password')||msg.includes('user-not-found'))return 'Incorrect email or password. Please check your credentials.';
+  if(msg.includes('weak-password'))return 'Password should be at least 6 characters.';
+  if(msg.includes('invalid-email'))return 'Please enter a valid email address.';
+  if(msg.includes('network-request-failed'))return 'Network error. Please check your connection and try again.';
+  if(msg.includes('too-many-requests'))return 'Too many attempts. Please try again in a few moments.';
+  return msg.replace(/^Firebase:\s*/,'');
+ }
+ return 'Something went wrong. Please try again.';
+};
 
 function formatDeadline(deadlineStr?: string | null): { formatted: string; isPast: boolean; isUrgent: boolean } {
  if (!deadlineStr) return { formatted: '', isPast: false, isUrgent: false };
@@ -123,7 +137,310 @@ function computeSubmissionStats(sub: Partial<SubmissionData> | any, ex: any): { 
 }
 
 function Brand(){return <div className="brand-lockup"><span className="brand-mark"><span>S</span></span><div><strong>SLearn</strong><small>learn your way</small></div></div>}
-function LoginPage({busy,error,onSignUp,onLogin}:{busy:boolean;error:string;onSignUp:(r:Role)=>void;onLogin:()=>void}){return <main className="welcome-page"><nav className="welcome-nav"><Brand/><button className="login-link" disabled={busy} onClick={onLogin}><LogIn/> Log in</button></nav><section className="welcome-hero"><div className="welcome-copy"><div className="eyebrow"><Sparkles/> A better space to teach and learn</div><h1>One place for every <em>learning moment.</em></h1><p>Create a classroom, bring learners together and turn everyday questions into guided practice.</p><div className="signup-label">Create your free account</div><div className="welcome-actions"><button className="signup-card student-signup" disabled={busy} onClick={()=>onSignUp('student')}><span><BookOpen/></span><div><b>Sign up as Student</b><small>Join classes and follow your progress</small></div><ArrowRight/></button><button className="signup-card teacher-signup" disabled={busy} onClick={()=>onSignUp('teacher')}><span><GraduationCap/></span><div><b>Sign up as Teacher</b><small>Create classes and guide every learner</small></div><ArrowRight/></button></div>{busy&&<p className="auth-state"><LoaderCircle/> Opening Google sign in…</p>}{error&&<p className="auth-error">{error}</p>}<p className="returning-copy">Already have an account? <button onClick={onLogin}>Log in here</button></p></div><div className="welcome-visual" aria-hidden="true"><div className="preview-window"><div className="preview-top"><span className="preview-logo">S</span><span className="preview-dots"><i/><i/><i/></span></div><div className="preview-greeting"><small>GOOD MORNING</small><h2>Ready to learn?</h2></div><div className="preview-focus"><span><Sparkles/></span><div><small>TODAY'S FOCUS</small><h3>Small steps make<br/>big progress.</h3></div><strong>72<sup>%</sup></strong></div><div className="preview-classes"><article><BookOpen/><span><small>MY CLASS</small><b>Mathematics</b></span><em>2 tasks</em></article><article><BarChart3/><span><small>WEEKLY GOAL</small><b>Almost there</b></span><em>4 / 5</em></article></div></div><div className="float-note"><CheckCircle2/><span><b>Keep going!</b><small>Your progress is growing.</small></span></div></div></section></main>}
+function LoginPage({
+ busy: globalBusy,
+ error: globalError,
+ onAuth
+}:{
+ busy: boolean;
+ error: string;
+ onAuth: (params: AuthParams) => Promise<void>;
+}){
+ const [modalOpen, setModalOpen] = useState(false);
+ const [authMode, setAuthMode] = useState<'login'|'signup'>('signup');
+ const [authRole, setAuthRole] = useState<Role>('student');
+ const [name, setName] = useState('');
+ const [email, setEmail] = useState('');
+ const [password, setPassword] = useState('');
+ const [modalBusy, setModalBusy] = useState(false);
+ const [modalError, setModalError] = useState('');
+
+ const openModal = (mode: 'login'|'signup', role?: Role) => {
+  setAuthMode(mode);
+  if (role) setAuthRole(role);
+  setModalError('');
+  setModalOpen(true);
+ };
+
+ const switchMode = (mode: 'login'|'signup') => {
+  setAuthMode(mode);
+  setModalError('');
+ };
+
+ const handleEmailSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!email.trim() || !password.trim()) {
+   setModalError('Please enter both email and password.');
+   return;
+  }
+  if (authMode === 'signup' && password.length < 6) {
+   setModalError('Password must be at least 6 characters.');
+   return;
+  }
+  setModalBusy(true);
+  setModalError('');
+  try {
+   await onAuth({
+    provider: 'email',
+    mode: authMode,
+    role: authMode === 'signup' ? authRole : null,
+    email: email.trim(),
+    password,
+    name: name.trim()
+   });
+   setModalOpen(false);
+  } catch (err: any) {
+   setModalError(err?.message || 'Authentication failed. Please try again.');
+  } finally {
+   setModalBusy(false);
+  }
+ };
+
+ const handleGoogleSubmit = async () => {
+  setModalBusy(true);
+  setModalError('');
+  try {
+   await onAuth({
+    provider: 'google',
+    mode: authMode,
+    role: authMode === 'signup' ? authRole : null
+   });
+   setModalOpen(false);
+  } catch (err: any) {
+   setModalError(err?.message || 'Google sign-in failed. Please try again.');
+  } finally {
+   setModalBusy(false);
+  }
+ };
+
+ return (
+  <main className="welcome-page">
+   <nav className="welcome-nav">
+    <Brand/>
+    <button className="login-link" disabled={globalBusy} onClick={() => openModal('login')}>
+     <LogIn/> Log in
+    </button>
+   </nav>
+
+   <section className="welcome-hero">
+    <div className="welcome-copy">
+     <div className="eyebrow"><Sparkles/> A better space to teach and learn</div>
+     <h1>One place for every <em>learning moment.</em></h1>
+     <p>Create a classroom, bring learners together and turn everyday questions into guided practice.</p>
+     <div className="signup-label">Create your free account</div>
+     <div className="welcome-actions">
+      <button className="signup-card student-signup" disabled={globalBusy} onClick={() => openModal('signup', 'student')}>
+       <span><BookOpen/></span>
+       <div><b>Sign up as Student</b><small>Join classes and follow your progress</small></div>
+       <ArrowRight/>
+      </button>
+      <button className="signup-card teacher-signup" disabled={globalBusy} onClick={() => openModal('signup', 'teacher')}>
+       <span><GraduationCap/></span>
+       <div><b>Sign up as Teacher</b><small>Create classes and guide every learner</small></div>
+       <ArrowRight/>
+      </button>
+     </div>
+     {globalBusy && <p className="auth-state"><LoaderCircle className="animate-spin" /> Authenticating…</p>}
+     {globalError && <p className="auth-error">{globalError}</p>}
+     <p className="returning-copy">Already have an account? <button onClick={() => openModal('login')}>Log in here</button></p>
+    </div>
+
+    <div className="welcome-visual" aria-hidden="true">
+     <div className="preview-window">
+      <div className="preview-top">
+       <span className="preview-logo">S</span>
+       <span className="preview-dots"><i/><i/><i/></span>
+      </div>
+      <div className="preview-greeting">
+       <small>GOOD MORNING</small>
+       <h2>Ready to learn?</h2>
+      </div>
+      <div className="preview-focus">
+       <span><Sparkles/></span>
+       <div>
+        <small>TODAY'S FOCUS</small>
+        <h3>Small steps make<br/>big progress.</h3>
+       </div>
+       <strong>72<sup>%</sup></strong>
+      </div>
+      <div className="preview-classes">
+       <article>
+        <BookOpen/>
+        <span><small>MY CLASS</small><b>Mathematics</b></span>
+        <em>2 tasks</em>
+       </article>
+       <article>
+        <BarChart3/>
+        <span><small>WEEKLY GOAL</small><b>Almost there</b></span>
+        <em>4 / 5</em>
+       </article>
+      </div>
+     </div>
+     <div className="float-note">
+      <CheckCircle2/>
+      <span><b>Keep going!</b><small>Your progress is growing.</small></span>
+     </div>
+    </div>
+   </section>
+
+   <Dialog open={modalOpen} onOpenChange={setModalOpen}>
+    <DialogContent className="modal-card">
+     <DialogHeader>
+      <DialogTitle>{authMode === 'signup' ? 'Create your account' : 'Welcome back'}</DialogTitle>
+      <DialogDescription>
+       {authMode === 'signup'
+        ? (authRole === 'teacher' ? 'Sign up as a teacher to create classrooms and guided exercises.' : 'Sign up as a student to join classes and track your learning.')
+        : 'Sign in to your SLearn account using email & password or Google.'}
+      </DialogDescription>
+     </DialogHeader>
+
+     {authMode === 'signup' && (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', background: '#f1ece5', padding: '4px', borderRadius: '14px', marginTop: '4px' }}>
+       <button
+        type="button"
+        onClick={() => setAuthRole('student')}
+        style={{
+         display: 'flex',
+         alignItems: 'center',
+         justifyContent: 'center',
+         gap: '8px',
+         padding: '9px 12px',
+         borderRadius: '10px',
+         border: 0,
+         fontSize: '0.84rem',
+         fontWeight: 700,
+         cursor: 'pointer',
+         background: authRole === 'student' ? '#111' : 'transparent',
+         color: authRole === 'student' ? '#fff' : '#555',
+         transition: 'all 0.15s'
+        }}
+       >
+        <BookOpen style={{ width: 16, height: 16 }} />
+        Student
+       </button>
+       <button
+        type="button"
+        onClick={() => setAuthRole('teacher')}
+        style={{
+         display: 'flex',
+         alignItems: 'center',
+         justifyContent: 'center',
+         gap: '8px',
+         padding: '9px 12px',
+         borderRadius: '10px',
+         border: 0,
+         fontSize: '0.84rem',
+         fontWeight: 700,
+         cursor: 'pointer',
+         background: authRole === 'teacher' ? '#111' : 'transparent',
+         color: authRole === 'teacher' ? '#fff' : '#555',
+         transition: 'all 0.15s'
+        }}
+       >
+        <GraduationCap style={{ width: 16, height: 16 }} />
+        Teacher
+       </button>
+      </div>
+     )}
+
+     <form onSubmit={handleEmailSubmit} style={{ display: 'grid', gap: '11px', marginTop: '6px' }}>
+      {authMode === 'signup' && (
+       <label className="form-label">
+        Full Name
+        <Input
+         placeholder="e.g. Alex Tan"
+         value={name}
+         onChange={e => setName(e.target.value)}
+         disabled={modalBusy}
+        />
+       </label>
+      )}
+
+      <label className="form-label">
+       Email Address
+       <Input
+        type="email"
+        placeholder="name@example.com"
+        value={email}
+        onChange={e => setEmail(e.target.value)}
+        disabled={modalBusy}
+        required
+       />
+      </label>
+
+      <label className="form-label">
+       Password
+       <Input
+        type="password"
+        placeholder={authMode === 'signup' ? 'At least 6 characters' : 'Enter your password'}
+        value={password}
+        onChange={e => setPassword(e.target.value)}
+        disabled={modalBusy}
+        required
+       />
+      </label>
+
+      {modalError && <p className="form-error" style={{ marginTop: '2px' }}>{modalError}</p>}
+
+      <Button
+       type="submit"
+       className="primary-action"
+       disabled={modalBusy || !email.trim() || !password.trim()}
+       style={{ width: '100%', height: '46px', borderRadius: '14px', marginTop: '4px' }}
+      >
+       {modalBusy ? <LoaderCircle className="animate-spin" /> : authMode === 'signup' ? <ArrowRight /> : <LogIn />}
+       {authMode === 'signup' ? `Sign up as ${authRole === 'teacher' ? 'Teacher' : 'Student'}` : 'Log in with Email'}
+      </Button>
+     </form>
+
+     <div style={{ display: 'flex', alignItems: 'center', margin: '8px 0', gap: '10px' }}>
+      <div style={{ flex: 1, height: 1, background: '#e9e4dc' }} />
+      <span style={{ fontSize: '0.68rem', color: '#8b857d', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>or</span>
+      <div style={{ flex: 1, height: 1, background: '#e9e4dc' }} />
+     </div>
+
+     <button
+      type="button"
+      disabled={modalBusy}
+      onClick={handleGoogleSubmit}
+      style={{
+       width: '100%',
+       height: '46px',
+       borderRadius: '14px',
+       background: '#fff',
+       border: '1px solid #ded8cf',
+       fontWeight: 600,
+       fontSize: '0.88rem',
+       display: 'flex',
+       alignItems: 'center',
+       justifyContent: 'center',
+       gap: '10px',
+       color: '#111',
+       cursor: 'pointer',
+       boxShadow: '0 2px 5px rgba(0,0,0,0.03)'
+      }}
+     >
+      <svg width="18" height="18" viewBox="0 0 24 24">
+       <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+       <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+       <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+       <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+      </svg>
+      {authMode === 'signup' ? `Sign up with Google` : 'Log in with Google'}
+     </button>
+
+     <p style={{ textAlign: 'center', fontSize: '0.8rem', color: '#7a746d', margin: '10px 0 0' }}>
+      {authMode === 'signup' ? (
+       <>Already have an account? <button type="button" onClick={() => switchMode('login')} style={{ background: 'none', border: 0, fontWeight: 700, textDecoration: 'underline', color: '#111', cursor: 'pointer' }}>Log in</button></>
+      ) : (
+       <>Don't have an account? <button type="button" onClick={() => switchMode('signup')} style={{ background: 'none', border: 0, fontWeight: 700, textDecoration: 'underline', color: '#111', cursor: 'pointer' }}>Sign up</button></>
+      )}
+     </p>
+    </DialogContent>
+   </Dialog>
+  </main>
+ );
+}
 type NavTarget='overview'|'classes'|'quiz'|'progress';
 function AppShell({role,user,onExit,onNavigate,children,active='dashboard',classCount=0}:{role:Role;user:User;onExit:()=>void;onNavigate?:(target:NavTarget)=>void;children:React.ReactNode;active?:View;classCount?:number}){const go=(target:NavTarget)=>{if(onNavigate){onNavigate(target);return}if(target==='overview')window.scrollTo({top:0,behavior:'smooth'});else if(target==='classes')(document.querySelector('#classrooms,.classroom-title') as HTMLElement|null)?.scrollIntoView({behavior:'smooth'});else if(target==='progress')(document.querySelector('#progress,.class-stats,.analytics-summary-grid') as HTMLElement|null)?.scrollIntoView({behavior:'smooth'});else if(target==='quiz')(document.querySelector('.classroom-actions button,.primary-action') as HTMLButtonElement|null)?.click()};return <div className="app-shell"><aside className="sidebar"><Brand/><nav><button className={active==='dashboard'?'active':''} onClick={()=>go('overview')} title="Overview"><LayoutDashboard/><span>Overview</span></button><button className={active==='classroom'?'active':''} onClick={()=>go('classes')} title="Classrooms"><BookOpen/><span>Classrooms</span><b>{classCount}</b></button>{role==='teacher'&&<button className={active==='quiz'?'active':''} onClick={()=>go('quiz')} title="Quiz studio"><FileQuestion/><span>Quiz studio</span></button>}<button onClick={()=>go('progress')} title="Progress"><BarChart3/><span>Progress</span></button></nav><div className="sidebar-foot"><div className="mini-profile"><span>{initials(user.displayName)}</span><div><b>{user.displayName||'SLearn user'}</b><small>{role}</small></div></div><button onClick={onExit} aria-label="Sign out" title="Sign out"><LogOut/></button></div></aside><div className="mobile-bar"><Brand/><Menu/></div><section className="main-stage">{children}</section></div>}
 function Topbar({role,user}:{role:Role;user:User}){const first=(user.displayName||(role==='teacher'?'Teacher':'Learner')).split(' ')[0];return <header className="topbar"><div><span className="today">Your learning workspace</span><h1>{role==='teacher'?`Welcome, ${first}.`:`Ready to learn, ${first}?`}</h1></div><div className="top-actions"><label><Search/><input placeholder="Search"/></label><span className={`role-badge ${role}`}>{role==='teacher'?<GraduationCap/>:<BookOpen/>}{role}</span></div></header>}
@@ -772,10 +1089,89 @@ function QuizBuilder({user,classroom,onBack,onExit}:{user:User;classroom:Classro
 export default function Home(){
  const [user,setUser]=useState<User|null>(null),[role,setRole]=useState<Role|null>(null),[ready,setReady]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[view,setView]=useState<View>('dashboard'),[selectedClass,setSelectedClass]=useState<ClassroomData|null>(null),[selectedExercise,setSelectedExercise]=useState<any|null>(null);
  useEffect(()=>onAuthStateChanged(auth,async current=>{setUser(current);if(current){const profile=await getDoc(doc(db,'users',current.uid));setRole(profile.exists()?(profile.data().role as Role):null)}else setRole(null);setReady(true)}),[]);
- const authenticate=async(selectedRole:Role|null,mode:'signup'|'login')=>{setBusy(true);setError('');try{const result=await signInWithPopup(auth,googleProvider);const userRef=doc(db,'users',result.user.uid);const existingSnap=await getDoc(userRef);const data=existingSnap.exists()?existingSnap.data():null;const existingRole=data?.role as Role|undefined;if(mode==='login'){if(!existingSnap.exists()||!existingRole){await signOut(auth);setError('No SLearn account was found for this Google account. Choose Student or Teacher to sign up first.');return}await setDoc(userRef,{displayName:result.user.displayName||data?.displayName||'',email:result.user.email||data?.email||'',photoURL:result.user.photoURL||data?.photoURL||'',lastLoginAt:serverTimestamp()},{merge:true});setUser(result.user);setRole(existingRole);setView('dashboard');return}if(!selectedRole)return;if(existingRole&&existingRole!==selectedRole){await signOut(auth);setError(`This account is already registered as a ${existingRole}. Use Log in to continue.`);return}if(existingSnap.exists()){await setDoc(userRef,{displayName:result.user.displayName||data?.displayName||'',email:result.user.email||data?.email||'',photoURL:result.user.photoURL||data?.photoURL||'',lastLoginAt:serverTimestamp()},{merge:true})}else{await setDoc(userRef,{displayName:result.user.displayName||'',email:result.user.email||'',photoURL:result.user.photoURL||'',role:selectedRole,createdAt:serverTimestamp(),lastLoginAt:serverTimestamp()})}setUser(result.user);setRole(existingRole||selectedRole);setView('dashboard')}catch(e){setError(friendlyError(e))}finally{setBusy(false)}};
- const logout=async()=>{await signOut(auth);setView('dashboard');setSelectedClass(null);setSelectedExercise(null)};
+
+ const handleAuth = async (action: AuthParams) => {
+  setBusy(true);
+  setError('');
+  try {
+   let userResult: User;
+   if (action.provider === 'google') {
+    const result = await signInWithPopup(auth, googleProvider);
+    userResult = result.user;
+   } else {
+    if (action.mode === 'signup') {
+     const result = await createUserWithEmailAndPassword(auth, action.email!, action.password!);
+     if (action.name?.trim()) {
+      await updateProfile(result.user, { displayName: action.name.trim() }).catch(() => {});
+     }
+     userResult = result.user;
+    } else {
+     const result = await signInWithEmailAndPassword(auth, action.email!, action.password!);
+     userResult = result.user;
+    }
+   }
+
+   const userRef = doc(db, 'users', userResult.uid);
+   const existingSnap = await getDoc(userRef);
+   const data = existingSnap.exists() ? existingSnap.data() : null;
+   const existingRole = data?.role as Role | undefined;
+
+   if (action.mode === 'login') {
+    if (!existingSnap.exists() || !existingRole) {
+     await signOut(auth);
+     throw new Error('No SLearn account was found for this user. Please choose Sign up first.');
+    }
+    await setDoc(userRef, {
+     displayName: userResult.displayName || data?.displayName || action.name || '',
+     email: userResult.email || data?.email || action.email || '',
+     photoURL: userResult.photoURL || data?.photoURL || '',
+     lastLoginAt: serverTimestamp()
+    }, { merge: true });
+    setUser(userResult);
+    setRole(existingRole);
+    setView('dashboard');
+    return;
+   }
+
+   // Signup mode
+   if (!action.role) return;
+   if (existingRole && existingRole !== action.role) {
+    await signOut(auth);
+    throw new Error(`This account is already registered as a ${existingRole}. Use Log in to continue.`);
+   }
+
+   if (existingSnap.exists()) {
+    await setDoc(userRef, {
+     displayName: userResult.displayName || data?.displayName || action.name || '',
+     email: userResult.email || data?.email || action.email || '',
+     photoURL: userResult.photoURL || data?.photoURL || '',
+     lastLoginAt: serverTimestamp()
+    }, { merge: true });
+   } else {
+    await setDoc(userRef, {
+     displayName: userResult.displayName || action.name || userResult.email?.split('@')[0] || 'Learner',
+     email: userResult.email || action.email || '',
+     photoURL: userResult.photoURL || '',
+     role: action.role,
+     createdAt: serverTimestamp(),
+     lastLoginAt: serverTimestamp()
+    });
+   }
+   setUser(userResult);
+   setRole(existingRole || action.role);
+   setView('dashboard');
+  } catch (e) {
+   const friendly = friendlyError(e);
+   setError(friendly);
+   throw new Error(friendly);
+  } finally {
+   setBusy(false);
+  }
+ };
+
+ const logout=async()=>{await signOut(auth);setUser(null);setRole(null);setView('dashboard');setSelectedClass(null);setSelectedExercise(null)};
  if(!ready)return <div className="loading-screen"><Brand/><LoaderCircle/><p>Preparing SLearn…</p></div>;
- if(!user||!role)return <LoginPage busy={busy} error={error} onSignUp={r=>authenticate(r,'signup')} onLogin={()=>authenticate(null,'login')}/>;
+ if(!user||!role)return <LoginPage busy={busy} error={error} onAuth={handleAuth}/>;
  if(view==='exercise'&&selectedClass&&selectedExercise)return <StudentExerciseRunner user={user} classroom={selectedClass} exercise={selectedExercise} onBack={()=>setView('classroom')} onExit={logout}/>;
  if(view==='classroom'&&selectedClass)return <Classroom role={role} user={user} classroom={selectedClass} onBack={()=>setView('dashboard')} onQuiz={()=>setView('quiz')} onStartExercise={(ex)=>{setSelectedExercise(ex);setView('exercise')}} onExit={logout} onClassUpdated={setSelectedClass} onClassDeleted={()=>{setSelectedClass(null);setView('dashboard');}}/>;
  if(view==='quiz'&&selectedClass&&role==='teacher')return <QuizBuilder user={user} classroom={selectedClass} onBack={()=>setView('classroom')} onExit={logout}/>;
