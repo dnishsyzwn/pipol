@@ -38,3 +38,8 @@ next-env.d.ts
 *.tsbuildinfo
 /outputs/
 /work/
+
+# Firebase Functions generated files and local secrets
+/functions/node_modules/
+/functions/lib/
+/functions/.env*

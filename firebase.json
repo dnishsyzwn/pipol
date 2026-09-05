@@ -1,4 +1,14 @@
 {
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs22"
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
   "hosting": {
     "public": "dist/client",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
@@ -24,8 +34,5 @@
         ]
       }
     ]
-  },
-  "firestore": {
-    "rules": "firestore.rules"
   }
 }

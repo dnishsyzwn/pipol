@@ -2,48 +2,151 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() { return request.auth != null; }
-    function ownsClass(classId) {
-      return signedIn() && get(/databases/$(database)/documents/classrooms/$(classId)).data.teacherId == request.auth.uid;
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isTeacher() {
+      return signedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+    }
+
+    function ownsClassroom(classroomId) {
+      return isTeacher()
+        && get(/databases/$(database)/documents/classrooms/$(classroomId)).data.teacherId == request.auth.uid;
+    }
+
+    function isActiveMember(classroomId) {
+      return signedIn()
+        && (
+          get(/databases/$(database)/documents/classrooms/$(classroomId)/members/$(request.auth.uid)).data.status == 'active'
+          || !get(/databases/$(database)/documents/classrooms/$(classroomId)/members/$(request.auth.uid)).data.keys().hasAny(['status'])
+        );
+    }
+
+    function canReadDraft() {
+      return signedIn()
+        && (resource.data.ownerId == request.auth.uid
+          || request.auth.uid in resource.data.reviewerIds);
     }
 
     match /users/{userId} {
-      allow read, create, update: if signedIn() && request.auth.uid == userId;
+      // A user may create their initial profile, but cannot later promote or
+      // demote themselves by changing the role field.
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role in ['teacher', 'student'];
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && (
+          request.resource.data.role == resource.data.role
+          || (!resource.data.keys().hasAny(['role'])
+            && request.resource.data.role in ['teacher', 'student'])
+        );
+      allow delete: if false;
 
       match /joinRequests/{classId} {
-        allow read, create, update: if signedIn() && request.auth.uid == userId;
-        allow delete: if signedIn() && (request.auth.uid == userId || resource.data.teacherId == request.auth.uid);
+        allow read: if signedIn() && request.auth.uid == userId;
+        allow create, update: if signedIn()
+          && request.auth.uid == userId
+          && request.resource.data.studentId == request.auth.uid
+          && request.resource.data.classId == classId;
+        allow delete: if signedIn()
+          && (request.auth.uid == userId
+            || resource.data.teacherId == request.auth.uid);
       }
 
       match /memberships/{classId} {
         allow read: if signedIn() && request.auth.uid == userId;
-        allow create, update: if signedIn() && request.resource.data.teacherId == request.auth.uid;
+        allow create, update: if ownsClassroom(classId)
+          && request.resource.data.teacherId == request.auth.uid
+          && request.resource.data.classId == classId;
+        allow delete: if ownsClassroom(classId);
       }
     }
 
-    match /classrooms/{classId} {
+    match /classrooms/{classroomId} {
+      // Students need to find a classroom by invite code before membership.
       allow read: if signedIn();
-      allow create: if signedIn() && request.resource.data.teacherId == request.auth.uid;
-      allow update, delete: if signedIn() && resource.data.teacherId == request.auth.uid;
+      allow create: if isTeacher()
+        && request.resource.data.teacherId == request.auth.uid;
+      allow update, delete: if ownsClassroom(classroomId);
 
       match /requests/{studentId} {
-        allow read: if signedIn() && (request.auth.uid == studentId || ownsClass(classId));
+        allow read: if signedIn()
+          && (request.auth.uid == studentId || ownsClassroom(classroomId));
         allow create: if signedIn()
           && request.auth.uid == studentId
           && request.resource.data.studentId == request.auth.uid
-          && request.resource.data.teacherId == get(/databases/$(database)/documents/classrooms/$(classId)).data.teacherId;
-        allow delete: if signedIn() && (request.auth.uid == studentId || ownsClass(classId));
+          && request.resource.data.classId == classroomId
+          && request.resource.data.teacherId == get(/databases/$(database)/documents/classrooms/$(classroomId)).data.teacherId;
+        allow delete: if signedIn()
+          && (request.auth.uid == studentId || ownsClassroom(classroomId));
+        allow update: if ownsClassroom(classroomId);
       }
 
       match /members/{studentId} {
-        allow read: if signedIn() && (request.auth.uid == studentId || ownsClass(classId));
-        allow create, update, delete: if ownsClass(classId);
+        allow read: if signedIn()
+          && (request.auth.uid == studentId || ownsClassroom(classroomId));
+        allow create, update, delete: if ownsClassroom(classroomId);
       }
 
       match /exercises/{exerciseId} {
-        allow read: if signedIn();
-        allow write: if ownsClass(classId);
+        allow read: if signedIn()
+          && (ownsClassroom(classroomId) || isActiveMember(classroomId));
+        allow write: if ownsClassroom(classroomId);
       }
+    }
+
+    // AI workflow data is readable only by the owning teacher/reviewer. All
+    // mutations go through callable functions using the Admin SDK.
+    match /materials/{materialId} {
+      allow read: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /quizJobs/{jobId} {
+      allow read: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /quizDrafts/{draftId} {
+      allow read: if canReadDraft();
+      allow write: if false;
+    }
+
+    match /quizzes/{quizId} {
+      allow read: if signedIn()
+        && resource.data.status == 'published'
+        && (ownsClassroom(resource.data.classroomId)
+          || isActiveMember(resource.data.classroomId));
+      allow write: if false;
+    }
+
+    match /quizAttempts/{attemptId} {
+      allow read: if signedIn() && resource.data.studentId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /quizAnalytics/{quizId} {
+      allow read: if signedIn() && ownsClassroom(resource.data.classroomId);
+      allow write: if false;
+    }
+
+    match /usage/{usageId} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /questionBank/{questionId} {
+      allow read: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /quizAssets/{assetId} {
+      allow read: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow write: if false;
     }
   }
 }
