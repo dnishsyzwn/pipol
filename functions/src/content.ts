@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { unzipSync } from 'fflate';
-import pdfParse from 'pdf-parse';
+// The package root runs a debug self-test during Firebase source analysis and
+// tries to read a missing test PDF. Import the implementation directly.
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import mammoth from 'mammoth';
 import { config } from './config.js';
 import { invalid } from './errors.js';
