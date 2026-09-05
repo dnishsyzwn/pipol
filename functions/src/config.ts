@@ -1,10 +1,6 @@
 import { defineSecret } from 'firebase-functions/params';
 
-export const aiApiKey = defineSecret('AI_API_KEY');
 export const vertexApiKey = defineSecret('VERTEX_AI_API_KEY');
-export const vertexAccessToken = defineSecret('VERTEX_AI_ACCESS_TOKEN');
-export const openRouterApiKey = defineSecret('OPENROUTER_API_KEY');
-export const xplabsApiKey = defineSecret('XPLABS_AI_API_KEY');
 // Only the active Vertex credential is injected into deployed functions.
 // Other provider slots remain documented but cannot expand the attack surface
 // or block deployment while Vertex is the only supported route.
@@ -45,7 +41,7 @@ export const config = {
 };
 
 export function getAiApiKey(): string {
-  const value = aiApiKey.value() || process.env.AI_API_KEY;
+  const value = process.env.AI_API_KEY;
   if (!value && !config.dryRun) {
     throw new Error('AI_API_KEY is not configured as a Firebase secret.');
   }
@@ -54,11 +50,11 @@ export function getAiApiKey(): string {
 
 export function getProviderSecret(provider: string): string {
   const value = provider === 'vertex'
-    ? vertexApiKey.value() || process.env.VERTEX_AI_API_KEY || vertexAccessToken.value() || process.env.VERTEX_AI_ACCESS_TOKEN
-    : provider === 'openrouter'
-      ? openRouterApiKey.value() || process.env.OPENROUTER_API_KEY
+    ? vertexApiKey.value() || process.env.VERTEX_AI_API_KEY || process.env.VERTEX_AI_ACCESS_TOKEN
+      : provider === 'openrouter'
+      ? process.env.OPENROUTER_API_KEY
       : provider === 'xplabs'
-        ? xplabsApiKey.value() || process.env.XPLABS_AI_API_KEY
+        ? process.env.XPLABS_AI_API_KEY
         : getAiApiKey();
   if (!value && !config.dryRun) throw new Error(`${provider} credentials are not configured.`);
   return value ?? '';
