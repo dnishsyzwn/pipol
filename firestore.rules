@@ -17,7 +17,7 @@ service cloud.firestore {
 
       match /memberships/{classId} {
         allow read: if signedIn() && request.auth.uid == userId;
-        allow create, update: if signedIn() && (request.auth.uid == userId || request.resource.data.teacherId == request.auth.uid);
+        allow create, update: if signedIn() && request.resource.data.teacherId == request.auth.uid;
       }
     }
 
@@ -28,7 +28,10 @@ service cloud.firestore {
 
       match /requests/{studentId} {
         allow read: if signedIn() && (request.auth.uid == studentId || ownsClass(classId));
-        allow create: if signedIn() && request.auth.uid == studentId && request.resource.data.studentId == request.auth.uid;
+        allow create: if signedIn()
+          && request.auth.uid == studentId
+          && request.resource.data.studentId == request.auth.uid
+          && request.resource.data.teacherId == get(/databases/$(database)/documents/classrooms/$(classId)).data.teacherId;
         allow delete: if signedIn() && (request.auth.uid == studentId || ownsClass(classId));
       }
 
