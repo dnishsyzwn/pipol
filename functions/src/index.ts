@@ -413,7 +413,11 @@ export const recordQuizAttempt = onCall(async (request) => {
   const classroomId = String(quiz.get('classroomId'));
   await requireClassroomMember(classroomId, auth.uid);
   const questions = (quiz.get('questions') as QuizQuestion[] | undefined) ?? [];
-  const results = questions.map((question) => ({ questionId: question.id, correct: input.answers[question.id]?.trim().toLowerCase() === question.correctAnswer.trim().toLowerCase() }));
+  const results = questions.map((question) => ({
+    questionId: question.id,
+    difficulty: question.difficulty,
+    correct: input.answers[question.id]?.trim().toLowerCase() === question.correctAnswer.trim().toLowerCase(),
+  }));
   const score = results.length ? Math.round((results.filter((result) => result.correct).length / results.length) * 100) : 0;
   const attemptRef = db.collection('quizAttempts').doc();
   await attemptRef.set({ quizId: input.quizId, classroomId, studentId: auth.uid, answers: input.answers, results, score, completedAt: FieldValue.serverTimestamp() });
