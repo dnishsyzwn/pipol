@@ -12,21 +12,19 @@ Lumina currently uses Vertex AI only:
 | Text fallback | `gemini-2.5-flash` |
 | Supporting visuals | `gemini-2.5-flash-image` |
 
-Required values:
+Required deployment configuration:
 
 ```text
-VERTEX_AI_API_KEY
 VERTEX_AI_PROJECT=hackathon-mmu-2026
 VERTEX_AI_LOCATION=global
 ```
 
-For a production Google Cloud setup, prefer a short-lived Vertex access token or the deployed function's service identity over a long-lived API key. The backend accepts `VERTEX_AI_ACCESS_TOKEN` for that path.
+Cloud Functions uses its Google service identity and short-lived OAuth tokens for production Vertex calls. Grant the deployed runtime service account the Vertex AI User role. `VERTEX_AI_API_KEY` remains an optional local/testing slot, but it is not injected into production deployments.
 
 Set secrets with the Firebase CLI after authenticating:
 
 ```text
 firebase functions:secrets:set VERTEX_AI_API_KEY
-firebase functions:secrets:set VERTEX_AI_ACCESS_TOKEN
 ```
 
 Only configure one Vertex credential method for a deployment. Do not paste the value into this file.

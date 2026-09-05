@@ -1,4 +1,5 @@
-import { config, getProviderSecret } from './config.js';
+import { GoogleAuth } from 'google-auth-library';
+import { config } from './config.js';
 import { sanitizeSourceText } from './content.js';
 import { internal, unavailable } from './errors.js';
 import { GeneratedQuizSchema } from './schemas.js';
@@ -28,12 +29,14 @@ function vertexUrl(model: string): string {
   return `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(config.vertexProject)}/locations/${encodeURIComponent(config.vertexLocation)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
 }
 
-function vertexHeaders(): Record<string, string> {
-  const accessToken = process.env.VERTEX_AI_ACCESS_TOKEN;
-  const key = getProviderSecret('vertex');
+const googleAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+
+async function vertexHeaders(): Promise<Record<string, string>> {
+  const accessToken = process.env.VERTEX_AI_ACCESS_TOKEN || (await googleAuth.getAccessToken());
+  if (!accessToken) internal('The Cloud Functions service identity could not obtain a Vertex AI access token.');
   return {
     'content-type': 'application/json',
-    ...(accessToken ? { authorization: `Bearer ${accessToken}` } : { 'x-goog-api-key': key }),
+    authorization: `Bearer ${accessToken}`,
   };
 }
 
@@ -41,7 +44,7 @@ async function requestVertex(userText: string, model: string, generationConfig: 
   return withTimeout(async (signal) => {
     const response = await fetch(vertexUrl(model), {
       method: 'POST',
-      headers: vertexHeaders(),
+      headers: await vertexHeaders(),
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: userText }] }],
         generationConfig,

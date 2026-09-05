@@ -83,7 +83,7 @@ Supports teacher-requested simplify, translate, and alt-text transformations. Re
 - Firebase rules deny direct client writes to jobs, drafts, published quizzes, attempts, usage, question-bank records, and assets.
 - Question attempts are scored on the server.
 - Quotas are reserved transactionally before generation and refunded on failed jobs.
-- Provider secrets are Firebase secrets, never client data.
+- Production Vertex authentication uses the Cloud Functions service identity and short-lived OAuth tokens; API-key slots are not injected into deployed functions.
 - Uploaded material is stored in a user-specific path and is not public.
 - Source material is delimited as untrusted data in the AI prompt; document instructions cannot override the system instruction.
 - Generated visuals are blocked for obvious sexualized, exploitative, pornographic, and graphic requests and still require teacher review.
