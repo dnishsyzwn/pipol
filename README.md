@@ -18,4 +18,4 @@ npm install
 npm run dev
 ```
 
-The Firebase project is `hackathon-mmu-2026` (display name: **Hackathon MMU 2026**) with Cloud Firestore provisioned in Singapore. The visible MVP currently uses presentation-safe client state; Firebase web credentials are intentionally not committed.
+The Firebase project is `hackathon-mmu-2026` (display name: **Hackathon MMU 2026**) with Cloud Firestore provisioned in Singapore and Email/Password Authentication enabled. The visible MVP currently uses presentation-safe client state; Firebase web credentials are intentionally not committed.
