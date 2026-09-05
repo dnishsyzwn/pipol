@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 type Role = 'teacher' | 'student';
 export type DetailClassroom = {id:string;name:string;subject:string;code:string;teacherId:string;teacherName:string;students:number;maxStudents?:number;progress:number};
 type Membership = {id:string;classId:string;className:string;code:string;teacherId:string;teacherName:string;progress:number;tasks:number};
-type JoinRequest = {id:string;classId:string;className:string;code:string;teacherId:string;studentId:string;studentName:string;studentEmail:string};
+type JoinRequest = {id:string;classId:string;className:string;code:string;teacherId:string;teacherName?:string;studentId:string;studentName:string;studentEmail:string};
 const colours=['lime','blue','violet'];
 const initials=(name?:string|null)=>(name||'Learner').split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();
 
