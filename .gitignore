@@ -35,5 +35,6 @@ next-env.d.ts
 /dist/
 /.wrangler/
 /.firebase/
+*.tsbuildinfo
 /outputs/
 /work/
