@@ -4,13 +4,14 @@ import { useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { addDoc, collection, doc, getDoc, getDocs, increment, limit, onSnapshot, query, serverTimestamp, setDoc, where, writeBatch } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { ArrowLeft, ArrowRight, BarChart3, BookOpen, Bot, Check, CheckCircle2, ChevronRight, Clock3, Copy, FileQuestion, GraduationCap, LayoutDashboard, LoaderCircle, LogOut, Menu, MoreHorizontal, Pencil, Plus, Search, Send, Sparkles, Trash2, Users, WandSparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { auth, db, googleProvider } from '@/lib/firebase';
+import { auth, db, functions, googleProvider } from '@/lib/firebase';
 
 type Role='teacher'|'student'; type View='dashboard'|'classroom'|'quiz'|'exercise';
 type ClassroomData={id:string;name:string;subject:string;code:string;teacherId:string;teacherName:string;students:number;maxStudents?:number;progress:number};
@@ -259,6 +260,8 @@ function QuizBuilder({user,classroom,onBack,onExit}:{user:User;classroom:Classro
  const [questions,setQuestions]=useState<QuestionItem[]>([{id:'1',question:'Solve for x: 3x + 5 = 20.',answer:'x = 5',points:2,enhanced:false}]);
  const [publishing,setPublishing]=useState(false);
  const [published,setPublished]=useState(false);
+ const [aiTest,setAiTest]=useState<'idle'|'testing'|'ok'|'error'>('idle');
+ const [aiMessage,setAiMessage]=useState('');
 
  const addQuestion=()=>{
   setQuestions(prev=>[...prev,{id:Math.random().toString(36).slice(2,9),question:'',answer:'',points:2,enhanced:false}]);
@@ -286,6 +289,7 @@ function QuizBuilder({user,classroom,onBack,onExit}:{user:User;classroom:Classro
 
  const hasEnhancedAny=questions.some(q=>q.enhanced);
  const isValid=title.trim()&&questions.some(q=>q.question.trim());
+ const testAi=async()=>{setAiTest('testing');setAiMessage('');try{const result=await httpsCallable(functions,'testAiConnection')({prompt:'hi hello'});setAiTest('ok');setAiMessage((result.data as {response?:string}).response||'AI replied successfully.')}catch{setAiTest('error');setAiMessage('Connection test failed. This requires a teacher account with App Check enabled.')}};
 
  const publish=async()=>{
   if(!isValid)return;

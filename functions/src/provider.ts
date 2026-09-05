@@ -175,3 +175,11 @@ export async function transformQuestion(question: QuizQuestion, operation: strin
   const payload = await requestVertex(input, 'gemini-2.5-flash-lite', { temperature: 0.1, responseMimeType: 'application/json' });
   return GeneratedQuizSchema.shape.questions.element.parse(extractJson(payload));
 }
+
+export async function testVertexConnection(): Promise<string> {
+  if (config.dryRun) return 'VERTEX_AI_DRY_RUN_OK';
+  const payload = await requestVertex('hi hello', 'gemini-2.5-flash-lite', { temperature: 0, maxOutputTokens: 16 });
+  const text = responseParts(payload).map((part) => part.text).filter((value): value is string => typeof value === 'string').join(' ').trim();
+  if (!text) internal('Vertex AI returned no text for the connection test.');
+  return text;
+}
