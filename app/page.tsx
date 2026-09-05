@@ -441,10 +441,8 @@ function LoginPage({
 
    <section className="welcome-hero">
     <div className="welcome-copy">
-     <div className="eyebrow"><Sparkles/> A better space to teach and learn</div>
      <h1>One place for every <em>learning moment.</em></h1>
      <p>Create a classroom, bring learners together and turn everyday questions into guided practice.</p>
-     <div className="signup-label">Create your free account</div>
      <div className="welcome-actions">
       <button className="signup-card student-signup" disabled={globalBusy} onClick={() => openModal('signup', 'student')}>
        <span><BookOpen/></span>
@@ -459,7 +457,6 @@ function LoginPage({
      </div>
      {globalBusy && <p className="auth-state"><LoaderCircle className="animate-spin" /> Authenticating…</p>}
      {globalError && <p className="auth-error">{globalError}</p>}
-     <p className="returning-copy">Already have an account? <button onClick={() => openModal('login')}>Log in here</button></p>
     </div>
 
     <div className="welcome-visual" aria-hidden="true">
@@ -483,19 +480,10 @@ function LoginPage({
       <div className="preview-classes">
        <article>
         <BookOpen/>
-        <span><small>MY CLASS</small><b>Mathematics</b></span>
-        <em>2 tasks</em>
-       </article>
-       <article>
-        <BarChart3/>
-        <span><small>WEEKLY GOAL</small><b>Almost there</b></span>
-        <em>4 / 5</em>
-       </article>
+       <span><small>MY CLASS</small><b>Mathematics</b></span>
+       <em>2 tasks</em>
+      </article>
       </div>
-     </div>
-     <div className="float-note">
-      <CheckCircle2/>
-      <span><b>Keep going!</b><small>Your progress is growing.</small></span>
      </div>
     </div>
    </section>
