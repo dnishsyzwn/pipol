@@ -4380,6 +4380,10 @@ function QuizBuilder({
   const [generating, setGenerating] = useState(false);
   const [generationStatus, setGenerationStatus] = useState('');
   const [quota, setQuota] = useState({ questionsUsed: 0, imagesUsed: 0 });
+  const [quickGenerateIndex, setQuickGenerateIndex] = useState<number | null>(null);
+  const [quickPrompt, setQuickPrompt] = useState('');
+  const [quickGenerating, setQuickGenerating] = useState(false);
+  const [quickGenerateError, setQuickGenerateError] = useState('');
 
   useEffect(() => {
     const periodKey = new Date().toISOString().slice(0, 7);
@@ -4440,6 +4444,50 @@ function QuizBuilder({
     } catch (error) {
       updateQuestion(index, 'loading', false);
       setAiMessage(error instanceof Error ? error.message : 'AI enhancement failed.');
+    }
+  };
+
+  const generateSingleQuestion = async () => {
+    if (quickGenerateIndex === null) return;
+    if (quota.questionsUsed >= 15) {
+      setQuickGenerateError('Your monthly AI question quota has been used.');
+      return;
+    }
+    setQuickGenerating(true);
+    setQuickGenerateError('');
+    try {
+      const creation = await httpsCallable(functions, 'createQuizGenerationJob')({
+        classroomId: classroom.id,
+        title: title.trim() || `${classroom.subject} practice`,
+        prompt: quickPrompt.trim() || `Create one original ${classroom.subject} practice question with a clear answer.`,
+        materialIds: [],
+        questionCount: 1,
+        imageCount: 0,
+        imageMode: 'none',
+        subject: classroom.subject,
+        language: 'English',
+        difficulty: 'medium',
+        questionTypes: ['short_answer'],
+        learningObjectives: [],
+      });
+      const jobId = (creation.data as { jobId: string }).jobId;
+      const job = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const unsubscribe = onSnapshot(doc(db, 'quizJobs', jobId), (snapshot) => {
+          const value = snapshot.data();
+          if (value?.status === 'completed') { unsubscribe(); resolve(value); }
+          if (value?.status === 'failed') { unsubscribe(); reject(new Error(String(value.error || 'Generation failed.'))); }
+        }, reject);
+      });
+      const draft = await getDoc(doc(db, 'quizDrafts', String(job.draftId)));
+      const generated = (draft.data()?.questions ?? [])[0] as { question?: string; correctAnswer?: string } | undefined;
+      if (!generated?.question) throw new Error('No question was generated. Please try again.');
+      setQuestions((current) => current.map((question, index) => index === quickGenerateIndex ? { ...question, question: generated.question || '', answer: generated.correctAnswer || '', enhanced: true } : question));
+      setQuickGenerateIndex(null);
+      setQuickPrompt('');
+    } catch (error) {
+      setQuickGenerateError(error instanceof Error ? error.message : 'AI generation failed.');
+    } finally {
+      setQuickGenerating(false);
     }
   };
 
@@ -4825,31 +4873,19 @@ function QuizBuilder({
                   />
                 </label>
               </div>
-              <div className="hint-row">
-                <div>
-                  <span>
-                    <Bot />
-                  </span>
-                  <p>
-                    <b>AI enhancement</b>
-                    <small>Add context and scaffold reasoning.</small>
-                  </p>
+              <div className="ai-question-bar">
+                <div className="ai-question-label">
+                  <span><Bot /></span>
+                  <p><b>SLearn AI</b><small>Refine or create</small></p>
                 </div>
-                <Button
-                  className="enhance-btn"
-                  onClick={() => enhanceQuestion(idx)}
-                  disabled={q.loading}
-                >
-                  {q.loading ? (
-                    <>
-                      <LoaderCircle /> Enhancing…
-                    </>
-                  ) : (
-                    <>
-                      <WandSparkles /> AI Enhance
-                    </>
-                  )}
-                </Button>
+                <div className="ai-question-actions">
+                  <Button className="ai-action enhance" onClick={() => enhanceQuestion(idx)} disabled={q.loading}>
+                    {q.loading ? <><LoaderCircle /> Enhancing…</> : <><WandSparkles /> AI Enhance</>}
+                  </Button>
+                  <Button className="ai-action generate" onClick={() => { setQuickGenerateIndex(idx); setQuickPrompt(''); setQuickGenerateError(''); }} disabled={q.loading || generating}>
+                    <Sparkles /> AI Generate
+                  </Button>
+                </div>
               </div>
               {q.enhanced && (
                 <div className="enhanced-note">
@@ -4939,6 +4975,21 @@ function QuizBuilder({
           </div>
         </aside>
       </div>
+      <Dialog open={quickGenerateIndex !== null} onOpenChange={(open) => { if (!open && !quickGenerating) setQuickGenerateIndex(null); }}>
+        <DialogContent className="modal-card quick-generate-modal">
+          <DialogHeader>
+            <DialogTitle>Generate a new question</DialogTitle>
+            <DialogDescription>Describe what this question should test. SLearn AI will place the result directly into Question {quickGenerateIndex === null ? '' : String(quickGenerateIndex + 1).padStart(2, '0')}.</DialogDescription>
+          </DialogHeader>
+          <label className="form-label">Topic or instruction<Textarea value={quickPrompt} onChange={(event) => setQuickPrompt(event.target.value)} placeholder={`Example: Create a medium-difficulty ${classroom.subject} question about today's lesson.`} className="quick-generate-prompt" /></label>
+          <div className="quick-generate-note"><Sparkles/><span><b>1 question will be generated</b><small>You can edit it before publishing.</small></span></div>
+          {quickGenerateError && <p className="form-error">{quickGenerateError}</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setQuickGenerateIndex(null)} disabled={quickGenerating}>Cancel</Button>
+            <Button className="primary-action" onClick={generateSingleQuestion} disabled={quickGenerating || quota.questionsUsed >= 15}>{quickGenerating ? <><LoaderCircle/> Generating…</> : <><Sparkles/> Generate question</>}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }
