@@ -12,7 +12,7 @@ import { Progress } from '@/components/ui/progress';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { auth, db, googleProvider } from '@/lib/firebase';
 
-type Role='teacher'|'student'; type View='dashboard'|'classroom'|'quiz';
+type Role='teacher'|'student'; type View='dashboard'|'classroom'|'quiz'|'exercise';
 type ClassroomData={id:string;name:string;subject:string;code:string;teacherId:string;teacherName:string;students:number;maxStudents?:number;progress:number};
 type JoinRequest={id:string;classId:string;className:string;code:string;teacherId:string;studentId:string;studentName:string;studentEmail:string};
 type Membership={id:string;classId:string;className:string;code:string;teacherId:string;teacherName:string;progress:number;tasks:number};
@@ -44,10 +44,191 @@ function StudentDashboard({user,onView,onExit,onSelectClass}:{user:User;onView:(
  return <AppShell role="student" user={user} onExit={onExit} classCount={memberships.length}><Topbar role="student" user={user}/>{memberships.length?<div className="student-hero"><div><span className="eyebrow"><Sparkles/> Your learning</span><h2>Keep building<br/>your momentum.</h2><p>Your progress updates as you complete classroom activities.</p></div><div className="streak-ring"><strong>{total}</strong><span>%<br/>progress</span></div></div>:<EmptyState role="student" action={()=>setJoinOpen(true)}/>} {pending.map(p=><div className="pending-banner" key={p.classId}><span><Clock3/></span><div><b>Waiting for teacher approval</b><p><strong>{p.className}</strong> · code {p.code}</p></div></div>)}{memberships.length>0&&<><div className="section-head"><div><span className="kicker">Your learning spaces</span><h2>My classrooms</h2></div><Button onClick={()=>setJoinOpen(true)} className="primary-action"><Plus/> Join classroom</Button></div><div className="student-grid">{memberships.map((m,i)=><button className={`student-class ${colours[i%3]}`} key={m.classId} onClick={()=>{onSelectClass({id:m.classId,name:m.className,subject:m.className,code:m.code,teacherId:m.teacherId,teacherName:m.teacherName,students:0,progress:m.progress||0});onView('classroom')}}><div className="subject-number">0{i+1}</div><div className="student-class-info"><small>{m.teacherName}</small><h3>{m.className}</h3><div className="task-line"><span>{m.tasks||0} tasks due</span><span>{m.progress||0}% mastered</span></div><Progress value={m.progress||0}/></div><ChevronRight/></button>)}</div></>}<Dialog open={joinOpen} onOpenChange={setJoinOpen}><DialogContent className="modal-card"><DialogHeader><DialogTitle>Join a classroom</DialogTitle><DialogDescription>Enter the class code from your teacher. Access starts after approval.</DialogDescription></DialogHeader><label className="form-label">Classroom code<Input className="code-input" placeholder="e.g. MATH-4K2" value={joinCode} onChange={e=>{setJoinCode(e.target.value.toUpperCase());setMessage('')}}/></label><div className="approval-note"><Clock3/> Your request will appear on the teacher’s dashboard.</div>{message&&<p className="form-error">{message}</p>}<DialogFooter><Button variant="outline" onClick={()=>setJoinOpen(false)}>Cancel</Button><Button disabled={busy||!joinCode.trim()} onClick={requestJoin}>{busy?<LoaderCircle/>:<Send/>} Request to join</Button></DialogFooter></DialogContent></Dialog></AppShell>
 }
 
-function Classroom({role,user,classroom,onBack,onQuiz,onExit}:{role:Role;user:User;classroom:ClassroomData;onBack:()=>void;onQuiz:()=>void;onExit:()=>void}){
+function Classroom({role,user,classroom,onBack,onQuiz,onStartExercise,onExit}:{role:Role;user:User;classroom:ClassroomData;onBack:()=>void;onQuiz:()=>void;onStartExercise:(ex:any)=>void;onExit:()=>void}){
  const [exercises,setExercises]=useState<{id:string;title:string;question?:string;questions?:any[];questionCount?:number;enhanced?:boolean}[]>([]);
  useEffect(()=>onSnapshot(collection(db,'classrooms',classroom.id,'exercises'),s=>setExercises(s.docs.map(d=>({id:d.id,...d.data()} as any)))),[classroom.id]);
- return <AppShell role={role} user={user} onExit={onExit} active="classroom" classCount={1}><div className="detail-top"><button onClick={onBack}><ArrowLeft/> Back to overview</button><span className="sdg-pill">{classroom.code}</span></div><div className="classroom-title"><div><span className="kicker">Classroom</span><h1>{classroom.name}</h1><p>{role==='teacher'?`${classroom.students||0} learners · ${classroom.subject}`:`${classroom.teacherName} · You’re approved`}</p></div>{role==='teacher'&&<Button onClick={onQuiz}><Plus/> Create exercise</Button>}</div><div className="classroom-layout"><section className="panel activity-panel"><div className="panel-head"><div><span className="kicker">Learning activities</span><h2>{exercises.length?`${exercises.length} Exercise${exercises.length>1?'s':''}`:'No exercises yet'}</h2></div></div>{exercises.length?<div style={{display:'grid',gap:'0.8rem',marginTop:'1rem'}}>{exercises.map((ex,i)=>{const count=ex.questionCount||ex.questions?.length||1;const firstQ=ex.question||(ex.questions&&ex.questions[0]?.question)||'Exercise checkpoint';return <div key={ex.id||i} style={{background:'#f8faf7',border:'1px solid #eeeae4',borderRadius:'18px',padding:'1.2rem',display:'flex',justify:'space-between',alignItems:'center'}}><div><div style={{display:'flex',alignItems:'center',gap:'0.5rem',marginBottom:'0.3rem'}}><FileQuestion style={{width:'18px',height:'18px',color:'#111'}}/><b style={{fontSize:'1rem'}}>{ex.title}</b><span style={{background:'#eef2ee',color:'#44554b',fontSize:'0.68rem',padding:'0.2rem 0.55rem',borderRadius:'99px',fontWeight:600}}>{count} Question{count>1?'s':''}</span>{ex.enhanced&&<span style={{background:'#d9f1e5',color:'#111',fontSize:'0.65rem',padding:'0.2rem 0.5rem',borderRadius:'99px',display:'inline-flex',alignItems:'center',gap:'0.2rem'}}><Sparkles style={{width:'10px',height:'10px'}}/> AI Enhanced</span>}</div><p style={{margin:0,color:'#666',fontSize:'0.88rem'}}>{firstQ}</p></div><Button variant="outline" size="sm">{role==='teacher'?'View details':'Start exercise'}</Button></div>})}</div>:<div className="class-empty"><FileQuestion/><h3>{role==='teacher'?'Build the first exercise':'Your teacher is preparing the first activity'}</h3><p>{role==='teacher'?'Start with your own question, then use AI Enhance.':'New lessons and quizzes will appear here.'}</p>{role==='teacher'&&<Button onClick={onQuiz}><Plus/> Create exercise</Button>}</div>}</section><aside className="panel class-stats"><span className="kicker">{role==='teacher'?'Class pulse':'My progress'}</span><h2>{exercises.length?`${exercises.length} published`:'0% mastery'}</h2><Progress value={exercises.length?100:0}/><div className="tip"><Sparkles/><p>{role==='teacher'?'Insights appear after students complete an activity.':'Progress starts after your first activity.'}</p></div></aside></div></AppShell>
+ return <AppShell role={role} user={user} onExit={onExit} active="classroom" classCount={1}><div className="detail-top"><button onClick={onBack}><ArrowLeft/> Back to overview</button><span className="sdg-pill">{classroom.code}</span></div><div className="classroom-title"><div><span className="kicker">Classroom</span><h1>{classroom.name}</h1><p>{role==='teacher'?`${classroom.students||0} learners · ${classroom.subject}`:`${classroom.teacherName} · You’re approved`}</p></div>{role==='teacher'&&<Button onClick={onQuiz}><Plus/> Create exercise</Button>}</div><div className="classroom-layout"><section className="panel activity-panel"><div className="panel-head"><div><span className="kicker">Learning activities</span><h2>{exercises.length?`${exercises.length} Exercise${exercises.length>1?'s':''}`:'No exercises yet'}</h2></div></div>{exercises.length?<div style={{display:'grid',gap:'0.8rem',marginTop:'1rem'}}>{exercises.map((ex,i)=>{const count=ex.questionCount||ex.questions?.length||1;const firstQ=ex.question||(ex.questions&&ex.questions[0]?.question)||'Exercise checkpoint';return <div key={ex.id||i} style={{background:'#f8faf7',border:'1px solid #eeeae4',borderRadius:'18px',padding:'1.2rem',display:'flex',justify:'space-between',alignItems:'center'}}><div><div style={{display:'flex',alignItems:'center',gap:'0.5rem',marginBottom:'0.3rem'}}><FileQuestion style={{width:'18px',height:'18px',color:'#111'}}/><b style={{fontSize:'1rem'}}>{ex.title}</b><span style={{background:'#eef2ee',color:'#44554b',fontSize:'0.68rem',padding:'0.2rem 0.55rem',borderRadius:'99px',fontWeight:600}}>{count} Question{count>1?'s':''}</span>{ex.enhanced&&<span style={{background:'#d9f1e5',color:'#111',fontSize:'0.65rem',padding:'0.2rem 0.5rem',borderRadius:'99px',display:'inline-flex',alignItems:'center',gap:'0.2rem'}}><Sparkles style={{width:'10px',height:'10px'}}/> AI Enhanced</span>}</div><p style={{margin:0,color:'#666',fontSize:'0.88rem'}}>{firstQ}</p></div><Button variant="outline" size="sm" onClick={()=>onStartExercise(ex)}>{role==='teacher'?'Preview exercise':'Start exercise'}</Button></div>})}</div>:<div className="class-empty"><FileQuestion/><h3>{role==='teacher'?'Build the first exercise':'Your teacher is preparing the first activity'}</h3><p>{role==='teacher'?'Start with your own question, then use AI Enhance.':'New lessons and quizzes will appear here.'}</p>{role==='teacher'&&<Button onClick={onQuiz}><Plus/> Create exercise</Button>}</div>}</section><aside className="panel class-stats"><span className="kicker">{role==='teacher'?'Class pulse':'My progress'}</span><h2>{exercises.length?`${exercises.length} published`:'0% mastery'}</h2><Progress value={exercises.length?100:0}/><div className="tip"><Sparkles/><p>{role==='teacher'?'Insights appear after students complete an activity.':'Progress starts after your first activity.'}</p></div></aside></div></AppShell>
+}
+
+function StudentExerciseRunner({user,classroom,exercise,onBack,onExit}:{user:User;classroom:ClassroomData;exercise:any;onBack:()=>void;onExit:()=>void}){
+ const rawQuestions: QuestionItem[] = exercise.questions?.length ? exercise.questions : (exercise.question ? [{ id: '1', question: exercise.question, answer: exercise.answer || '', points: 2, enhanced: exercise.enhanced || false }] : []);
+ const [currentIdx, setCurrentIdx] = useState(0);
+ const [answers, setAnswers] = useState<Record<number, string>>({});
+ const [submitting, setSubmitting] = useState(false);
+ const [submitted, setSubmitted] = useState(false);
+ const [earnedScore, setEarnedScore] = useState(0);
+ const [submitError, setSubmitError] = useState('');
+
+ const totalPoints = rawQuestions.reduce((n, q) => n + (Number(q.points) || 1), 0);
+ const currentQ = rawQuestions[currentIdx] || { question: 'No question text provided', answer: '', points: 1, enhanced: false };
+
+ const handleAnswer = (text: string) => {
+  setAnswers(prev => ({ ...prev, [currentIdx]: text }));
+ };
+
+ const submitExercise = async () => {
+  setSubmitting(true);
+  setSubmitError('');
+  try {
+   let score = 0;
+   rawQuestions.forEach((q, i) => {
+    const userA = (answers[i] || '').trim().toLowerCase();
+    const expA = (q.answer || '').trim().toLowerCase();
+    const pts = Number(q.points) || 1;
+    if (userA && expA && (userA === expA || expA.includes(userA) || userA.includes(expA))) {
+     score += pts;
+    } else if (userA.length > 0) {
+     score += Math.max(1, Math.round(pts * 0.5));
+    }
+   });
+   setEarnedScore(score);
+
+   await addDoc(collection(db, 'classrooms', classroom.id, 'exercises', exercise.id, 'submissions'), {
+    studentId: user.uid,
+    studentName: user.displayName || 'Student',
+    studentEmail: user.email || '',
+    answers,
+    score,
+    totalPoints,
+    submittedAt: serverTimestamp()
+   });
+
+   try {
+    const pct = Math.min(100, Math.round((score / (totalPoints || 1)) * 100));
+    await setDoc(doc(db, 'users', user.uid, 'memberships', classroom.id), {
+     progress: pct
+    }, { merge: true });
+   } catch (e) {
+    console.warn('Membership progress note:', e);
+   }
+
+   setSubmitted(true);
+  } catch (e: any) {
+   console.error('Error submitting exercise:', e);
+   setSubmitError(e?.message?.includes('permission') ? 'Missing or insufficient permissions. The security rules were just updated; please refresh your page and try again.' : (e?.message || 'Error submitting exercise.'));
+  } finally {
+   setSubmitting(false);
+  }
+ };
+
+ const progressPct = Math.round(((currentIdx + 1) / (rawQuestions.length || 1)) * 100);
+
+ return (
+  <AppShell role="student" user={user} onExit={onExit} active="classroom" classCount={1}>
+   <div className="detail-top">
+    <button onClick={onBack}><ArrowLeft/> Back to {classroom.name}</button>
+    <span className="sdg-pill">{submitted ? 'Completed' : `Question ${currentIdx + 1} of ${rawQuestions.length}`}</span>
+   </div>
+
+   <div className="classroom-title">
+    <div>
+     <span className="kicker">Exercise Checkpoint</span>
+     <h1>{exercise.title}</h1>
+     <p>{classroom.name} · {classroom.subject}</p>
+    </div>
+   </div>
+
+   {submitted ? (
+    <div style={{ background: '#fff', borderRadius: '24px', padding: '2.5rem', boxShadow: '0 0 0 1px #eeeae4', maxWidth: '780px', margin: '0 auto', textAlign: 'center' }}>
+     <div style={{ width: '64px', height: '64px', background: '#d9f1e5', borderRadius: '50%', display: 'grid', placeItems: 'center', margin: '0 auto 1.5rem', color: '#173e30' }}>
+      <CheckCircle2 style={{ width: '36px', height: '36px' }}/>
+     </div>
+     <h2 style={{ fontSize: '2rem', fontWeight: 600, margin: '0 0 0.5rem' }}>Exercise Completed!</h2>
+     <p style={{ color: '#66786e', margin: '0 0 2rem' }}>Your answers have been submitted to your teacher.</p>
+     <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem', margin: '1.5rem 0 2.5rem' }}>
+      <div style={{ background: '#f8faf7', borderRadius: '16px', padding: '1.2rem 2rem' }}>
+       <small style={{ color: '#778', textTransform: 'uppercase', fontSize: '0.7rem', letterSpacing: '0.08em', fontWeight: 700 }}>Score</small>
+       <div style={{ fontSize: '2.2rem', fontWeight: 700, color: '#111' }}>{earnedScore} <span style={{ fontSize: '1rem', color: '#888' }}>/ {totalPoints} pts</span></div>
+      </div>
+      <div style={{ background: '#f8faf7', borderRadius: '16px', padding: '1.2rem 2rem' }}>
+       <small style={{ color: '#778', textTransform: 'uppercase', fontSize: '0.7rem', letterSpacing: '0.08em', fontWeight: 700 }}>Mastery</small>
+       <div style={{ fontSize: '2.2rem', fontWeight: 700, color: '#173e30' }}>{Math.round((earnedScore / (totalPoints || 1)) * 100)}%</div>
+      </div>
+     </div>
+     <Button onClick={onBack} className="primary-action"><ArrowLeft/> Return to Classroom</Button>
+    </div>
+   ) : (
+    <div className="classroom-layout">
+     <section className="panel activity-panel">
+      <div className="panel-head" style={{ marginBottom: '1rem' }}>
+       <div>
+        <span className="kicker">Question 0{currentIdx + 1} of 0{rawQuestions.length}</span>
+        <h2 style={{ fontSize: '1.3rem', marginTop: '0.2rem' }}>Solve the problem</h2>
+       </div>
+       <span style={{ background: '#f1ece5', padding: '0.3rem 0.8rem', borderRadius: '99px', fontSize: '0.75rem', fontWeight: 600 }}>{currentQ.points || 1} Points</span>
+      </div>
+
+      <div style={{ background: '#fbfaf7', border: '1px solid #eeeae4', borderRadius: '18px', padding: '1.5rem', marginBottom: '1.5rem' }}>
+       <p style={{ fontSize: '1.15rem', lineHeight: '1.6', margin: 0, fontWeight: 500, color: '#111' }}>{currentQ.question}</p>
+       {currentQ.enhanced && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '1rem', background: '#eef5dc', padding: '0.7rem 1rem', borderRadius: '12px', color: '#385b20', fontSize: '0.8rem' }}>
+         <Sparkles style={{ width: '16px', height: '16px' }}/>
+         <span><strong>Guided Reasoning:</strong> Read carefully and show how you reached your answer.</span>
+        </div>
+       )}
+      </div>
+
+      <label className="form-label" style={{ fontSize: '0.9rem', marginBottom: '0.5rem', display: 'block' }}>
+       Your Answer
+       <Textarea
+        rows={4}
+        placeholder="Type your answer or reasoning here..."
+        value={answers[currentIdx] || ''}
+        onChange={e => handleAnswer(e.target.value)}
+        style={{ marginTop: '0.4rem', borderRadius: '14px', fontSize: '1rem' }}
+       />
+      </label>
+
+      {submitError && <div style={{ background: '#fde8e8', color: '#c81e1e', padding: '0.75rem 1rem', borderRadius: '12px', fontSize: '0.8rem', marginTop: '1rem' }}>{submitError}</div>}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid #eeeae4' }}>
+       <Button variant="outline" disabled={currentIdx === 0} onClick={() => setCurrentIdx(prev => Math.max(0, prev - 1))}>
+        <ArrowLeft/> Previous
+       </Button>
+       {currentIdx < rawQuestions.length - 1 ? (
+        <Button onClick={() => setCurrentIdx(prev => prev + 1)}>
+         Next Question <ArrowRight/>
+        </Button>
+       ) : (
+        <Button onClick={submitExercise} disabled={submitting} className="primary-action">
+         {submitting ? <LoaderCircle/> : <Check/>} Submit Exercise
+        </Button>
+       )}
+      </div>
+     </section>
+
+     <aside className="panel class-stats">
+      <span className="kicker">Progress</span>
+      <h2>{progressPct}%</h2>
+      <Progress value={progressPct}/>
+      <div style={{ marginTop: '1.5rem', display: 'grid', gap: '0.5rem' }}>
+       {rawQuestions.map((_, i) => (
+        <button
+         key={i}
+         onClick={() => setCurrentIdx(i)}
+         style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '0.7rem 1rem',
+          borderRadius: '12px',
+          border: '1px solid',
+          borderColor: currentIdx === i ? '#111' : '#eeeae4',
+          background: currentIdx === i ? '#fff' : answers[i]?.trim() ? '#eef2ee' : '#fcfbf9',
+          cursor: 'pointer',
+          textAlign: 'left'
+         }}
+        >
+         <span style={{ fontSize: '0.8rem', fontWeight: currentIdx === i ? 700 : 500 }}>Question 0{i + 1}</span>
+         {answers[i]?.trim() ? <Check style={{ width: '14px', height: '14px', color: '#173e30' }}/> : <span style={{ fontSize: '0.7rem', color: '#888' }}>Pending</span>}
+        </button>
+       ))}
+      </div>
+     </aside>
+    </div>
+   )}
+  </AppShell>
+ );
 }
 
 type QuestionItem={id:string;question:string;answer:string;points:number;enhanced:boolean;loading?:boolean};
@@ -105,4 +286,4 @@ function QuizBuilder({user,classroom,onBack,onExit}:{user:User;classroom:Classro
  return <AppShell role="teacher" user={user} onExit={onExit} active="quiz" classCount={1}><div className="builder-bar"><button onClick={onBack}><ArrowLeft/> {classroom.name}</button><div><span className="draft-dot"/> {published?'Published':'Draft'} ({questions.length} Question{questions.length>1?'s':''})</div><Button onClick={publish} disabled={published||publishing||!isValid}>{publishing?<LoaderCircle/>:published?<Check/>:<Send/>}{published?'Published':`Publish (${questions.length})`}</Button></div><div className="builder-head"><span className="kicker">Quiz studio</span><Input className="title-input" value={title} onChange={e=>setTitle(e.target.value)}/><p>Write your questions, add AI clarity, and build a complete exercise for your class.</p></div><div className="builder-grid"><section className="question-editor" style={{display:'grid',gap:'1.5rem'}}>{questions.map((q,idx)=><div key={q.id} style={{borderBottom:idx<questions.length-1?'1px solid #e9eee9':'none',paddingBottom:idx<questions.length-1?'1.5rem':'0'}}><div className="question-count"><span>Question 0{idx+1}</span>{questions.length>1&&<button type="button" onClick={()=>removeQuestion(idx)} aria-label="Remove question" style={{border:0,background:'none',color:'#a00',cursor:'pointer'}}><X style={{width:'18px',height:'18px'}}/></button>}</div><label className="form-label">Question text<Textarea value={q.question} onChange={e=>updateQuestion(idx,'question',e.target.value)} placeholder="Type question prompt..." className="question-text"/></label><div className="answer-block"><label className="form-label">Answer<Input value={q.answer} onChange={e=>updateQuestion(idx,'answer',e.target.value)} placeholder="Correct answer or explanation"/></label><label className="form-label">Points<Input type="number" min="1" value={q.points} onChange={e=>updateQuestion(idx,'points',Number(e.target.value)||1)}/></label></div><div className="hint-row"><div><span><Bot/></span><p><b>AI enhancement</b><small>Add context and scaffold reasoning.</small></p></div><Button className="enhance-btn" onClick={()=>enhanceQuestion(idx)} disabled={q.loading}>{q.loading?<><LoaderCircle/> Enhancing…</>:<><WandSparkles/> AI Enhance</>}</Button></div>{q.enhanced&&<div className="enhanced-note"><CheckCircle2/><div><b>Question 0{idx+1} enhanced</b><p>Added contextual problem framing & step-by-step reasoning prompt.</p></div></div>}</div>)}<button type="button" onClick={addQuestion} className="add-question" style={{display:'flex',alignItems:'center',justify:'center',gap:'0.5rem',padding:'1rem',width:'100%',cursor:'pointer'}}><Plus style={{width:'18px',height:'18px'}}/> Add Question 0{questions.length+1}</button><div style={{marginTop:'1rem',display:'flex',justify:'flex-end',gap:'0.8rem'}}><Button variant="outline" onClick={onBack}>Cancel</Button><Button onClick={publish} disabled={published||publishing||!isValid} className="primary-action">{publishing?<LoaderCircle/>:published?<Check/>:<Send/>} {published?'Published to Classroom':publishing?'Publishing...':`Publish Exercise (${questions.length} Question${questions.length>1?'s':''})`}</Button></div></section><aside className="ai-sidebar"><div className="ai-sidebar-head"><span><Sparkles/></span><div><small>Lumina AI</small><h3>Exercise overview</h3></div></div><div className="quality-score"><div><strong>{questions.length}</strong><span>Questions</span></div><p>Exercise Size</p></div><div className="checks">{['Clear learning objective','Age-appropriate language','Real-world relevance','Guided reasoning'].map((x,i)=><div className={(hasEnhancedAny||i<2)?'ready':''} key={x}><span>{hasEnhancedAny||i<2?<Check/>:i+1}</span>{x}</div>)}</div></aside></div></AppShell>
 }
 
-export default function Home(){const [user,setUser]=useState<User|null>(null),[role,setRole]=useState<Role|null>(null),[ready,setReady]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[view,setView]=useState<View>('dashboard'),[selectedClass,setSelectedClass]=useState<ClassroomData|null>(null);useEffect(()=>onAuthStateChanged(auth,async current=>{setUser(current);if(current){const profile=await getDoc(doc(db,'users',current.uid));setRole(profile.exists()?(profile.data().role as Role):null)}else setRole(null);setReady(true)}),[]);const login=async(selectedRole:Role)=>{setBusy(true);setError('');try{const result=await signInWithPopup(auth,googleProvider);await setDoc(doc(db,'users',result.user.uid),{displayName:result.user.displayName||'',email:result.user.email||'',photoURL:result.user.photoURL||'',role:selectedRole,lastLoginAt:serverTimestamp()},{merge:true});setUser(result.user);setRole(selectedRole);setView('dashboard')}catch(e){setError(friendlyError(e))}finally{setBusy(false)}};const logout=async()=>{await signOut(auth);setView('dashboard');setSelectedClass(null)};if(!ready)return <div className="loading-screen"><Brand/><LoaderCircle/><p>Preparing your learning space…</p></div>;if(!user||!role)return <LoginPage busy={busy} error={error} onLogin={login}/>;if(view==='classroom'&&selectedClass)return <Classroom role={role} user={user} classroom={selectedClass} onBack={()=>setView('dashboard')} onQuiz={()=>setView('quiz')} onExit={logout}/>;if(view==='quiz'&&selectedClass&&role==='teacher')return <QuizBuilder user={user} classroom={selectedClass} onBack={()=>setView('classroom')} onExit={logout}/>;return role==='teacher'?<TeacherDashboard user={user} onView={setView} onExit={logout} onSelectClass={setSelectedClass}/>:<StudentDashboard user={user} onView={setView} onExit={logout} onSelectClass={setSelectedClass}/>}
+export default function Home(){const [user,setUser]=useState<User|null>(null),[role,setRole]=useState<Role|null>(null),[ready,setReady]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[view,setView]=useState<View>('dashboard'),[selectedClass,setSelectedClass]=useState<ClassroomData|null>(null),[selectedExercise,setSelectedExercise]=useState<any|null>(null);useEffect(()=>onAuthStateChanged(auth,async current=>{setUser(current);if(current){const profile=await getDoc(doc(db,'users',current.uid));setRole(profile.exists()?(profile.data().role as Role):null)}else setRole(null);setReady(true)}),[]);const login=async(selectedRole:Role)=>{setBusy(true);setError('');try{const result=await signInWithPopup(auth,googleProvider);await setDoc(doc(db,'users',result.user.uid),{displayName:result.user.displayName||'',email:result.user.email||'',photoURL:result.user.photoURL||'',role:selectedRole,lastLoginAt:serverTimestamp()},{merge:true});setUser(result.user);setRole(selectedRole);setView('dashboard')}catch(e){setError(friendlyError(e))}finally{setBusy(false)}};const logout=async()=>{await signOut(auth);setView('dashboard');setSelectedClass(null);setSelectedExercise(null)};if(!ready)return <div className="loading-screen"><Brand/><LoaderCircle/><p>Preparing your learning space…</p></div>;if(!user||!role)return <LoginPage busy={busy} error={error} onLogin={login}/>;if(view==='exercise'&&selectedClass&&selectedExercise)return <StudentExerciseRunner user={user} classroom={selectedClass} exercise={selectedExercise} onBack={()=>setView('classroom')} onExit={logout}/>;if(view==='classroom'&&selectedClass)return <Classroom role={role} user={user} classroom={selectedClass} onBack={()=>setView('dashboard')} onQuiz={()=>setView('quiz')} onStartExercise={(ex)=>{setSelectedExercise(ex);setView('exercise')}} onExit={logout}/>;if(view==='quiz'&&selectedClass&&role==='teacher')return <QuizBuilder user={user} classroom={selectedClass} onBack={()=>setView('classroom')} onExit={logout}/>;return role==='teacher'?<TeacherDashboard user={user} onView={setView} onExit={logout} onSelectClass={setSelectedClass}/>:<StudentDashboard user={user} onView={setView} onExit={logout} onSelectClass={setSelectedClass}/>}
