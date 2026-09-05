@@ -65,6 +65,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
 import { toast } from '@/components/ui/toast';
 import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+} from '@/components/ui/combobox';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -73,6 +84,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { auth, db, functions, googleProvider, initializeSlearnAppCheck, storage } from '@/lib/firebase';
+import { curriculumFor, SCHOOL_STAGES, SCHOOL_YEARS, subjectsFor, type SchoolStage } from '@/lib/malaysia-curriculum';
 import { ClassroomsDetail, ProgressDetail } from './detail-pages';
 
 type Role = 'teacher' | 'student';
@@ -930,6 +942,8 @@ function TeacherDashboard({
     [requests, setRequests] = useState<JoinRequest[]>([]),
     [createOpen, setCreateOpen] = useState(false),
     [newName, setNewName] = useState(''),
+    [schoolStage, setSchoolStage] = useState<SchoolStage>('primary'),
+    [schoolYear, setSchoolYear] = useState('Tahun 1'),
     [newSubject, setNewSubject] = useState(''),
     [newMaxStudents, setNewMaxStudents] = useState('30'),
     [saving, setSaving] = useState(false),
@@ -944,6 +958,8 @@ function TeacherDashboard({
   const [deleteTarget, setDeleteTarget] = useState<ClassroomData | null>(null),
     [deleting, setDeleting] = useState(false),
     [deleteError, setDeleteError] = useState('');
+  const availableSubjects = subjectsFor(schoolStage, schoolYear);
+  const subjectGroups = [...new Set(availableSubjects.map((subject) => subject.category))];
 
   useEffect(
     () =>
@@ -972,7 +988,7 @@ function TeacherDashboard({
   }, [classes.map((c) => c.id).join('|')]);
 
   const createClass = async () => {
-    if (!newName.trim() || !newSubject.trim()) return;
+    if (!newName.trim() || !newSubject) return;
     if (classes.length >= MAX_TEACHER_CLASSES) {
       setError(
         `Teachers can only create a maximum of ${MAX_TEACHER_CLASSES} classrooms.`,
@@ -991,7 +1007,11 @@ function TeacherDashboard({
         }-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
         data = {
           name: newName.trim(),
-          subject: newSubject.trim(),
+          subject: `${newSubject} · ${schoolYear}`,
+          subjectName: newSubject,
+          schoolStage,
+          schoolYear,
+          curriculum: curriculumFor(schoolStage),
           code,
           teacherId: user.uid,
           teacherName: user.displayName || 'Teacher',
@@ -1373,18 +1393,82 @@ function TeacherDashboard({
               <label className="form-label">
                 Classroom name
                 <Input
-                  placeholder="e.g. Mathematics · Form 4"
+                  placeholder="e.g. 4 Bestari"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                 />
               </label>
+              <div className="curriculum-fields">
+                <label className="form-label">
+                  School level
+                  <NativeSelect
+                    className="curriculum-select"
+                    value={schoolStage}
+                    onChange={(e) => {
+                      const stage = e.target.value as SchoolStage;
+                      setSchoolStage(stage);
+                      setSchoolYear(SCHOOL_YEARS[stage][0]);
+                      setNewSubject('');
+                    }}
+                  >
+                    {SCHOOL_STAGES.map((stage) => (
+                      <NativeSelectOption key={stage.value} value={stage.value}>
+                        {stage.label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </label>
+                <label className="form-label">
+                  Year / form
+                  <NativeSelect
+                    className="curriculum-select"
+                    value={schoolYear}
+                    onChange={(e) => {
+                      setSchoolYear(e.target.value);
+                      setNewSubject('');
+                    }}
+                  >
+                    {SCHOOL_YEARS[schoolStage].map((year) => (
+                      <NativeSelectOption key={year} value={year}>
+                        {year}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </label>
+              </div>
               <label className="form-label">
-                Subject
-                <Input
-                  placeholder="e.g. Mathematics"
-                  value={newSubject}
-                  onChange={(e) => setNewSubject(e.target.value)}
-                />
+                KPM subject
+                <Combobox
+                  value={newSubject || null}
+                  onValueChange={(value) => setNewSubject(String(value || ''))}
+                  items={availableSubjects.map((subject) => subject.name)}
+                >
+                  <ComboboxInput
+                    className="curriculum-combobox"
+                    placeholder="Search a subject, e.g. Fizik"
+                    showClear
+                  />
+                  <ComboboxContent>
+                    <ComboboxEmpty>No matching subject for this level.</ComboboxEmpty>
+                    <ComboboxList>
+                      {subjectGroups.map((group) => (
+                        <ComboboxGroup key={group}>
+                          <ComboboxLabel>{group}</ComboboxLabel>
+                          {availableSubjects
+                            .filter((subject) => subject.category === group)
+                            .map((subject) => (
+                              <ComboboxItem key={subject.name} value={subject.name}>
+                                {subject.name}
+                              </ComboboxItem>
+                            ))}
+                        </ComboboxGroup>
+                      ))}
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
+                <small className="curriculum-note">
+                  {curriculumFor(schoolStage)} · {availableSubjects.length} subjects listed for {schoolYear}
+                </small>
               </label>
               <label className="form-label">
                 Student capacity (Max learners)
@@ -1413,7 +1497,7 @@ function TeacherDashboard({
                   disabled={
                     saving ||
                     !newName.trim() ||
-                    !newSubject.trim() ||
+                    !newSubject ||
                     classes.length >= MAX_TEACHER_CLASSES
                   }
                 >
