@@ -1,21 +1,18 @@
-# Lumina Learning Hub
+# SLearn
 
-Presentation-ready SDG 4 hackathon prototype for **Hackathon MMU 2026**.
+SLearn is a classroom learning hub for teachers and students.
 
-## Demo flows
+Teachers can create classrooms, approve join requests, publish exercises, and review learning analytics. Students can join with a class code, wait for approval, complete exercises, and follow their own progress.
 
-- Teacher and student role selection
-- Teacher classroom dashboard and classroom creation
-- Student classroom join request with pending approval state
-- Teacher approval queue
-- Shared classroom learning-path view
-- Teacher quiz builder with a mock AI enhancement flow
-
-## Run locally
+## Development
 
 ```bash
 npm install
 npm run dev
 ```
 
-The Firebase project is `hackathon-mmu-2026` (display name: **Hackathon MMU 2026**) with Cloud Firestore provisioned in Singapore and Email/Password Authentication enabled. The visible MVP currently uses presentation-safe client state; Firebase web credentials are intentionally not committed.
+## Production build
+
+```bash
+npm run build
+```

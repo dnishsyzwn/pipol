@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Lumina — Hackathon MMU 2026',
-  description: 'An AI-enhanced learning hub for inclusive, quality education.',
+  title: 'SLearn — Learn Your Way',
+  description: 'A focused learning space for teachers and students.',
 };
 
 export default function RootLayout({

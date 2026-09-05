@@ -80,7 +80,7 @@ export function AuthModal({ initialRole, onSuccess }: AuthModalProps) {
 
   return (
     <div className="w-full max-w-md mx-auto p-7 bg-[#fbfaf7] border border-[#e8e2d8] rounded-[28px] shadow-[0_24px_70px_rgba(24,19,14,0.14)] text-[#111]">
-      {/* Header section with Lumina brand style */}
+      {/* Header section */}
       <div className="text-center mb-6">
         <div className="inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-[#111] text-white font-black text-lg mb-3 shadow-sm">
           <span>4</span>
@@ -88,7 +88,7 @@ export function AuthModal({ initialRole, onSuccess }: AuthModalProps) {
         
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#f1ece5] border border-[#e5dfd6] text-[11px] font-bold tracking-wider uppercase text-[#6f685f] mb-2">
           <Sparkles className="w-3 h-3 text-[#706a63]" />
-          <span>Lumina Learning Hub</span>
+          <span>SLearn</span>
         </div>
 
         <h2 className="text-2xl font-medium tracking-tight text-[#111]">
@@ -98,7 +98,7 @@ export function AuthModal({ initialRole, onSuccess }: AuthModalProps) {
           {mode === 'login' 
             ? 'Sign in to access your personalized classrooms and lessons' 
             : mode === 'signup'
-            ? 'Join Lumina to unlock adaptive tools for students & teachers'
+            ? 'Join SLearn to unlock adaptive tools for students & teachers'
             : 'Enter your account email to receive a password reset link'}
         </p>
       </div>
