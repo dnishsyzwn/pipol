@@ -8,7 +8,7 @@ import { bucket, db } from './firebase.js';
 import { denied, failed, internal, invalid, unavailable } from './errors.js';
 import { requireAuth, requireClassroomMember, requireClassroomOwner, requireTeacher } from './auth.js';
 import { extractMaterial, extensionOf, supportedExtensions } from './content.js';
-import { generateImage, generateQuiz, transformQuestion } from './provider.js';
+import { generateImage, generateQuiz, testVertexConnection, transformQuestion } from './provider.js';
 import { assertGenerationInput, assertImagePromptAllowed, markSensitiveReview } from './safety.js';
 import {
   AttemptSchema,
@@ -26,6 +26,11 @@ import { refundReservation, reserveQuota, settleQuota, type QuotaReservation } f
 import type { QuizQuestion } from './types.js';
 
 setGlobalOptions({ region: 'asia-southeast1', maxInstances: 10, enforceAppCheck: true });
+
+export const testAiConnection = onCall(async (request) => {
+  await requireTeacher(request);
+  return { ok: true, response: await testVertexConnection() };
+});
 
 function data<T>(request: CallableRequest<unknown>, schema: { safeParse: (value: unknown) => { success: boolean; data?: T; error?: unknown } }): T {
   const parsed = schema.safeParse(request.data);

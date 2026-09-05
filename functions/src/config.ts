@@ -1,10 +1,7 @@
-import { defineSecret } from 'firebase-functions/params';
-
-export const vertexApiKey = defineSecret('VERTEX_AI_API_KEY');
-// Only the active Vertex credential is injected into deployed functions.
-// Other provider slots remain documented but cannot expand the attack surface
-// or block deployment while Vertex is the only supported route.
-export const providerSecrets = [vertexApiKey];
+// Cloud Functions uses its Google service identity for Vertex AI authentication.
+// API-key slots remain documented for local/provider experiments but are not
+// injected into production deployments.
+export const providerSecrets: never[] = [];
 
 function numberEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);
@@ -50,7 +47,7 @@ export function getAiApiKey(): string {
 
 export function getProviderSecret(provider: string): string {
   const value = provider === 'vertex'
-    ? vertexApiKey.value() || process.env.VERTEX_AI_API_KEY || process.env.VERTEX_AI_ACCESS_TOKEN
+    ? process.env.VERTEX_AI_API_KEY || process.env.VERTEX_AI_ACCESS_TOKEN
       : provider === 'openrouter'
       ? process.env.OPENROUTER_API_KEY
       : provider === 'xplabs'
