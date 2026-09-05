@@ -229,6 +229,11 @@ const friendlyError = (e: unknown) => {
   }
   return 'Something went wrong. Please try again.';
 };
+type AiQuota = {
+  questionsUsed: number;
+  imagesUsed: number;
+  nextResetAt: Date | null;
+};
 
 function aiErrorDetails(error: unknown) {
   const value = error as { code?: unknown; message?: unknown };
@@ -236,6 +241,55 @@ function aiErrorDetails(error: unknown) {
   const code = rawCode.replace(/^functions\//, '').replace(/[^a-zA-Z0-9_-]/g, '_').toUpperCase();
   const message = friendlyError(error);
   return { code, message, copyText: `SLearn AI error ${code}\n${message}` };
+}
+
+function quotaDate(value: unknown): Date | null {
+  if (value && typeof (value as { toDate?: unknown }).toDate === 'function') {
+    return (value as { toDate: () => Date }).toDate();
+  }
+  const date = value ? new Date(value as string | number) : null;
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+function useAiQuota(uid: string, enabled = true): AiQuota {
+  const [quota, setQuota] = useState<AiQuota>({ questionsUsed: 0, imagesUsed: 0, nextResetAt: null });
+  useEffect(() => {
+    if (!enabled) return;
+    let latest: Record<string, unknown> = {};
+    const refresh = () => {
+      const now = Date.now();
+      const credits = Array.isArray(latest.activeCredits) ? latest.activeCredits : [];
+      const active = credits.filter((credit) => {
+        const expiry = quotaDate((credit as { expiresAt?: unknown }).expiresAt);
+        return expiry && expiry.getTime() > now;
+      }) as Array<{ questions?: unknown; images?: unknown; expiresAt?: unknown }>;
+      const nextResetAt = active
+        .map((credit) => quotaDate(credit.expiresAt))
+        .filter((date): date is Date => Boolean(date))
+        .sort((left, right) => left.getTime() - right.getTime())[0] ?? null;
+      setQuota({
+        questionsUsed: active.reduce((sum, credit) => sum + Number(credit.questions ?? 0), 0),
+        imagesUsed: active.reduce((sum, credit) => sum + Number(credit.images ?? 0), 0),
+        nextResetAt,
+      });
+    };
+    const unsubscribe = onSnapshot(doc(db, 'usage', uid), (snapshot) => {
+      latest = snapshot.data() ?? {};
+      refresh();
+    });
+    const timer = window.setInterval(refresh, 30_000);
+    return () => { unsubscribe(); window.clearInterval(timer); };
+  }, [enabled, uid]);
+  return quota;
+}
+
+function quotaCountdown(date: Date | null) {
+  if (!date) return 'No credits currently waiting to return';
+  const remaining = Math.max(0, date.getTime() - Date.now());
+  const days = Math.floor(remaining / 86_400_000);
+  const hours = Math.floor((remaining % 86_400_000) / 3_600_000);
+  const minutes = Math.floor((remaining % 3_600_000) / 60_000);
+  return `${days}d ${hours}h ${minutes}m`;
 }
 
 function formatDeadline(deadlineStr?: string | null): {
@@ -749,6 +803,7 @@ function AppShell({
   const [profilePreview, setProfilePreview] = useState(user.photoURL || '');
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState('');
+  const profileQuota = useAiQuota(user.uid, role === 'teacher');
   useEffect(() => { if (!profileFile) { setProfilePreview(profilePhoto); return; } const url = URL.createObjectURL(profileFile); setProfilePreview(url); return () => URL.revokeObjectURL(url); }, [profileFile, profilePhoto]);
   const go = (target: NavTarget) => {
     if (onNavigate) {
@@ -806,7 +861,7 @@ function AppShell({
         <button type="button" className="mobile-profile" onClick={openProfile} aria-label="Edit profile">{avatar()}</button>
       </div>
       <section className="main-stage">{children}</section>
-      <Dialog open={profileOpen} onOpenChange={setProfileOpen}><DialogContent className="modal-card profile-modal"><DialogHeader><DialogTitle>Edit your profile</DialogTitle><DialogDescription>Update how your name and photo appear in SLearn.</DialogDescription></DialogHeader><div className="profile-editor"><div className="profile-photo-preview">{profilePreview ? <img src={profilePreview} alt="Profile preview" /> : <span>{initials(profileName)}</span>}<label title="Choose profile picture"><Camera/><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0])}/></label></div><label className="form-label">Display name<Input value={profileName} maxLength={60} onChange={(event) => setProfileName(event.target.value)} placeholder="Your name"/></label><p className="profile-help">JPG, PNG or WebP · maximum 5 MB</p>{profileError && <p className="auth-error">{profileError}</p>}</div><DialogFooter><Button variant="outline" onClick={() => setProfileOpen(false)} disabled={profileSaving}>Cancel</Button><Button className="primary-action" onClick={saveProfile} disabled={profileSaving}>{profileSaving ? <><LoaderCircle/> Saving…</> : <><Check/> Save profile</>}</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={profileOpen} onOpenChange={setProfileOpen}><DialogContent className="modal-card profile-modal"><DialogHeader><DialogTitle>Profile dashboard</DialogTitle><DialogDescription>Manage your profile and view your SLearn AI allowance.</DialogDescription></DialogHeader><div className="profile-editor"><div className="profile-photo-preview">{profilePreview ? <img src={profilePreview} alt="Profile preview" /> : <span>{initials(profileName)}</span>}<label title="Choose profile picture"><Camera/><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0])}/></label></div><label className="form-label">Display name<Input value={profileName} maxLength={60} onChange={(event) => setProfileName(event.target.value)} placeholder="Your name"/></label><p className="profile-help">JPG, PNG or WebP · maximum 5 MB</p>{role === 'teacher' && <div style={{ background: '#f8faf7', border: '1px solid #dfe8df', borderRadius: 16, padding: '1rem', width: '100%' }}><span className="kicker">Rolling 7-day AI quota</span><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.7rem', marginTop: '.6rem' }}><div><b>{Math.max(0, 15 - profileQuota.questionsUsed)}/15</b><small style={{ display: 'block' }}>questions available</small></div><div><b>{Math.max(0, 5 - profileQuota.imagesUsed)}/5</b><small style={{ display: 'block' }}>images available</small></div></div><div style={{ marginTop: '.8rem', paddingTop: '.8rem', borderTop: '1px solid #dfe8df' }}><b>Next credits return in {quotaCountdown(profileQuota.nextResetAt)}</b><small style={{ display: 'block', marginTop: '.2rem' }}>{profileQuota.nextResetAt ? profileQuota.nextResetAt.toLocaleString() : 'Each credit returns exactly seven days after use.'}</small></div></div>}{profileError && <p className="auth-error">{profileError}</p>}</div><DialogFooter><Button variant="outline" onClick={() => setProfileOpen(false)} disabled={profileSaving}>Close</Button><Button className="primary-action" onClick={saveProfile} disabled={profileSaving}>{profileSaving ? <><LoaderCircle/> Saving…</> : <><Check/> Save profile</>}</Button></DialogFooter></DialogContent></Dialog>
     </div>
   );
 }
@@ -4691,19 +4746,11 @@ function QuizBuilder({
   const [imageCount, setImageCount] = useState(0);
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | 'mixed'>('medium');
   const [generating, setGenerating] = useState(false);
-  const [quota, setQuota] = useState({ questionsUsed: 0, imagesUsed: 0 });
+  const quota = useAiQuota(user.uid);
   const [quickGenerateIndex, setQuickGenerateIndex] = useState<number | null>(null);
   const [quickPrompt, setQuickPrompt] = useState('');
   const [quickGenerating, setQuickGenerating] = useState(false);
   const [quickGenerateError, setQuickGenerateError] = useState('');
-
-  useEffect(() => {
-    const periodKey = new Date().toISOString().slice(0, 7);
-    return onSnapshot(doc(db, 'usage', `${user.uid}_${periodKey}`), (snapshot) => {
-      const value = snapshot.data();
-      setQuota({ questionsUsed: Number(value?.questionsUsed ?? 0), imagesUsed: Number(value?.imagesUsed ?? 0) });
-    });
-  }, [user.uid]);
 
   const addSourceFiles = (incoming: File[]) => {
     const supported = /\.(pdf|pptx|docx|md|txt|rtf|odp|odt)$/i;
@@ -4762,7 +4809,7 @@ function QuizBuilder({
   const generateSingleQuestion = async () => {
     if (quickGenerateIndex === null) return;
     if (quota.questionsUsed >= 15) {
-      setQuickGenerateError('Your monthly AI question quota has been used.');
+      setQuickGenerateError('Your rolling 7-day AI question quota has been used. Check your profile dashboard for the next credit return time.');
       return;
     }
     setQuickGenerating(true);

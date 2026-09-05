@@ -153,7 +153,8 @@ service cloud.firestore {
     }
 
     match /usage/{usageId} {
-      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow read: if signedIn()
+        && (usageId == request.auth.uid || resource.data.uid == request.auth.uid);
       allow write: if false;
     }
 

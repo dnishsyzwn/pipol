@@ -153,6 +153,7 @@ export const createQuizGenerationJob = onCall(
         periodKey: reservation.periodKey,
         questions: reservation.questions,
         images: reservation.images,
+        expiresAtMillis: reservation.expiresAtMillis,
       },
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -233,17 +234,19 @@ export const processQuizGenerationJob = onDocumentCreated(
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       }));
-      const reservationData = job.reservation as { periodKey: string; questions: number; images: number };
-      reservation = { ref: db.collection('usage').doc(`${job.ownerId}_${reservationData.periodKey}`), periodKey: reservationData.periodKey, questions: reservationData.questions, images: reservationData.images };
+      const reservationData = job.reservation as { periodKey: string; questions: number; images: number; expiresAtMillis: number };
+      const summaryRef = db.collection('usage').doc(String(job.ownerId));
+      reservation = { ref: summaryRef.collection('events').doc(reservationData.periodKey), summaryRef, periodKey: reservationData.periodKey, questions: reservationData.questions, images: reservationData.images, expiresAtMillis: reservationData.expiresAtMillis };
       await settleQuota(reservation, questions.length, generatedImages);
       await jobRef.update({ status: 'completed', draftId: draftRef.id, questionsGenerated: questions.length, imagesGenerated: generatedImages, updatedAt: FieldValue.serverTimestamp() });
       console.info('Quiz job completed', { jobId, draftId: draftRef.id, questions: questions.length });
     } catch (error) {
       try {
         const job = (await jobRef.get()).data();
-        const reservationData = job?.reservation as { periodKey: string; questions: number; images: number } | undefined;
+        const reservationData = job?.reservation as { periodKey: string; questions: number; images: number; expiresAtMillis: number } | undefined;
         if (job?.ownerId && reservationData) {
-          await refundReservation({ ref: db.collection('usage').doc(`${job.ownerId}_${reservationData.periodKey}`), periodKey: reservationData.periodKey, questions: reservationData.questions, images: reservationData.images });
+          const summaryRef = db.collection('usage').doc(String(job.ownerId));
+          await refundReservation({ ref: summaryRef.collection('events').doc(reservationData.periodKey), summaryRef, periodKey: reservationData.periodKey, questions: reservationData.questions, images: reservationData.images, expiresAtMillis: reservationData.expiresAtMillis });
         }
       } finally {
         await jobRef.update({ status: 'failed', error: error instanceof Error ? error.message.slice(0, 500) : 'Generation failed.', updatedAt: FieldValue.serverTimestamp() });
