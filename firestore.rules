@@ -11,6 +11,11 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
     }
 
+    function isAdmin() {
+      return signedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
     function ownsClassroom(classroomId) {
       return isTeacher()
         && get(/databases/$(database)/documents/classrooms/$(classroomId)).data.teacherId == request.auth.uid;
@@ -33,7 +38,7 @@ service cloud.firestore {
     match /users/{userId} {
       // A user may create their initial profile, but cannot later promote or
       // demote themselves by changing the role field.
-      allow read: if signedIn() && request.auth.uid == userId;
+      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
       allow create: if signedIn()
         && request.auth.uid == userId
         && request.resource.data.role in ['teacher', 'student'];
@@ -47,7 +52,7 @@ service cloud.firestore {
       allow delete: if false;
 
       match /joinRequests/{classId} {
-        allow read: if signedIn() && request.auth.uid == userId;
+        allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
         allow create, update: if signedIn()
           && request.auth.uid == userId
           && request.resource.data.studentId == request.auth.uid
@@ -58,7 +63,7 @@ service cloud.firestore {
       }
 
       match /memberships/{classId} {
-        allow read: if signedIn() && request.auth.uid == userId;
+        allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
         allow create: if ownsClassroom(classId)
           && request.resource.data.teacherId == request.auth.uid
           && request.resource.data.classId == classId;
@@ -79,7 +84,7 @@ service cloud.firestore {
 
       match /requests/{studentId} {
         allow read: if signedIn()
-          && (request.auth.uid == studentId || ownsClassroom(classroomId));
+          && (request.auth.uid == studentId || ownsClassroom(classroomId) || isAdmin());
         allow create: if signedIn()
           && request.auth.uid == studentId
           && request.resource.data.studentId == request.auth.uid
@@ -92,18 +97,18 @@ service cloud.firestore {
 
       match /members/{studentId} {
         allow read: if signedIn()
-          && (request.auth.uid == studentId || ownsClassroom(classroomId));
+          && (request.auth.uid == studentId || ownsClassroom(classroomId) || isAdmin());
         allow create, update, delete: if ownsClassroom(classroomId);
       }
 
       match /exercises/{exerciseId} {
         allow read: if signedIn()
-          && (ownsClassroom(classroomId) || isActiveMember(classroomId));
+          && (ownsClassroom(classroomId) || isActiveMember(classroomId) || isAdmin());
         allow write: if ownsClassroom(classroomId);
 
         match /submissions/{submissionId} {
           allow read: if signedIn()
-            && (request.auth.uid == resource.data.studentId || ownsClassroom(classroomId));
+            && (request.auth.uid == resource.data.studentId || ownsClassroom(classroomId) || isAdmin());
           allow create: if signedIn()
             && request.auth.uid == request.resource.data.studentId;
           allow update, delete: if signedIn()

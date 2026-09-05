@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 import { addDoc, collection, doc, getDocs, increment, limit, onSnapshot, query, serverTimestamp, writeBatch, where } from 'firebase/firestore';
-import { BarChart3, BookOpen, Check, ChevronRight, Clock3, LoaderCircle, Plus, Send, Users, X } from 'lucide-react';
+import { BarChart3, BookOpen, Check, ChevronRight, Clock3, LoaderCircle, Plus, Search, Send, Users, X } from 'lucide-react';
 import { db } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 type Role = 'teacher' | 'student';
 export type DetailClassroom = {id:string;name:string;subject:string;code:string;teacherId:string;teacherName:string;students:number;maxStudents?:number;progress:number};
 type Membership = {id:string;classId:string;className:string;code:string;teacherId:string;teacherName:string;progress:number;tasks:number};
-type JoinRequest = {id:string;classId:string;className:string;code:string;teacherId:string;studentId:string;studentName:string;studentEmail:string};
+type JoinRequest = {id:string;classId:string;className:string;code:string;teacherId:string;teacherName?:string;studentId:string;studentName:string;studentEmail:string};
 const colours=['lime','blue','violet'];
 const initials=(name?:string|null)=>(name||'Learner').split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();
 
@@ -25,15 +25,461 @@ function useLearningSpaces(role:Role,user:User){
  return {classes,memberships,pending};
 }
 
+function StudentSearchDetail({
+ user,
+ onCountChange
+}:{
+ user: User;
+ onCountChange: (count: number) => void;
+}){
+ const [allClassrooms, setAllClassrooms] = useState<DetailClassroom[]>([]);
+ const [memberships, setMemberships] = useState<Membership[]>([]);
+ const [pending, setPending] = useState<JoinRequest[]>([]);
+ const [searchQuery, setSearchQuery] = useState('');
+ const [joinCode, setJoinCode] = useState('');
+ const [joinOpen, setJoinOpen] = useState(false);
+ const [busy, setBusy] = useState(false);
+ const [requestBusyId, setRequestBusyId] = useState<string | null>(null);
+ const [message, setMessage] = useState('');
+ const [successMessage, setSuccessMessage] = useState('');
+
+ useEffect(() => {
+  return onSnapshot(collection(db, 'classrooms'), (s) => {
+   setAllClassrooms(s.docs.map((d) => ({ id: d.id, ...d.data() }) as DetailClassroom));
+  });
+ }, []);
+
+ useEffect(() => {
+  return onSnapshot(collection(db, 'users', user.uid, 'memberships'), (s) => {
+   setMemberships(s.docs.map((d) => ({ id: d.id, ...d.data() }) as Membership));
+  });
+ }, [user.uid]);
+
+ useEffect(() => {
+  return onSnapshot(collection(db, 'users', user.uid, 'joinRequests'), (s) => {
+   setPending(s.docs.map((d) => ({ id: d.id, ...d.data() }) as JoinRequest));
+  });
+ }, [user.uid]);
+
+ const unjoined = allClassrooms.filter(
+  (c) => !memberships.some((m) => m.classId === c.id)
+ );
+
+ const filtered = unjoined.filter((c) => {
+  if (!searchQuery.trim()) return true;
+  const q = searchQuery.toLowerCase().trim();
+  return (
+   (c.name && c.name.toLowerCase().includes(q)) ||
+   (c.code && c.code.toLowerCase().includes(q)) ||
+   (c.subject && c.subject.toLowerCase().includes(q)) ||
+   (c.teacherName && c.teacherName.toLowerCase().includes(q))
+  );
+ });
+
+ useEffect(() => {
+  onCountChange(unjoined.length);
+ }, [unjoined.length, onCountChange]);
+
+ const requestJoin = async (c: DetailClassroom) => {
+  setMessage('');
+  setSuccessMessage('');
+  setRequestBusyId(c.id);
+  try {
+   const currentStudents = c.students || 0;
+   const maxCap = c.maxStudents || 30;
+   if (currentStudents >= maxCap) {
+    setMessage(`This classroom has reached its maximum capacity (${currentStudents}/${maxCap} learners).`);
+    return;
+   }
+   if (memberships.some((m) => m.classId === c.id)) {
+    setMessage('You already joined this classroom.');
+    return;
+   }
+   if (pending.some((p) => p.classId === c.id)) {
+    setMessage('Your request is already waiting for teacher approval.');
+    return;
+   }
+   const data = {
+    classId: c.id,
+    className: c.name,
+    code: c.code,
+    teacherId: c.teacherId,
+    teacherName: c.teacherName || 'Teacher',
+    studentId: user.uid,
+    studentName: user.displayName || 'Student',
+    studentEmail: user.email || '',
+    createdAt: serverTimestamp(),
+   };
+   const batch = writeBatch(db);
+   batch.set(doc(db, 'classrooms', c.id, 'requests', user.uid), data);
+   batch.set(doc(db, 'users', user.uid, 'joinRequests', c.id), data);
+   await batch.commit();
+   setSuccessMessage(`Requested access to "${c.name}"! Waiting for teacher approval.`);
+  } catch {
+   setMessage('Something went wrong. Please try again.');
+  } finally {
+   setRequestBusyId(null);
+  }
+ };
+
+ const requestJoinByCode = async () => {
+  if (!joinCode.trim()) return;
+  setBusy(true);
+  setMessage('');
+  setSuccessMessage('');
+  try {
+   const code = joinCode.trim().toUpperCase();
+   const found = await getDocs(
+    query(collection(db, 'classrooms'), where('code', '==', code), limit(1))
+   );
+   if (found.empty) {
+    setMessage('Class code not found. Check the code and try again.');
+    return;
+   }
+   const c = { id: found.docs[0].id, ...found.docs[0].data() } as DetailClassroom;
+   await requestJoin(c);
+   setJoinCode('');
+   setJoinOpen(false);
+  } catch {
+   setMessage('Something went wrong. Please try again.');
+  } finally {
+   setBusy(false);
+  }
+ };
+
+ return (
+  <>
+   <header className="detail-page-head">
+    <div>
+     <span className="kicker">Discover Classrooms</span>
+     <h1>Find & Join Groups</h1>
+     <p>Browse available classrooms you haven't joined yet, or search new groups by name, subject, or code.</p>
+    </div>
+    <Button className="primary-action" onClick={() => setJoinOpen(true)}>
+     <Plus /> Enter Class Code
+    </Button>
+   </header>
+
+   <div
+    style={{
+     display: 'flex',
+     alignItems: 'center',
+     gap: '12px',
+     background: '#fff',
+     border: '1px solid #eeeae4',
+     borderRadius: '20px',
+     padding: '10px 18px',
+     marginBottom: '20px',
+     boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
+    }}
+   >
+    <Search style={{ width: 20, height: 20, color: '#777067' }} />
+    <input
+     type="text"
+     value={searchQuery}
+     onChange={(e) => setSearchQuery(e.target.value)}
+     placeholder="Search new groups by classroom name, subject, or code (e.g. MATH-4K2)..."
+     style={{
+      flex: 1,
+      border: 0,
+      outline: 'none',
+      fontSize: '0.95rem',
+      background: 'transparent',
+      color: '#111',
+     }}
+    />
+    {searchQuery && (
+     <button
+      type="button"
+      onClick={() => setSearchQuery('')}
+      style={{
+       border: 0,
+       background: 'none',
+       cursor: 'pointer',
+       color: '#777067',
+       padding: '4px',
+      }}
+      title="Clear search"
+     >
+      <X style={{ width: 16, height: 16 }} />
+     </button>
+    )}
+   </div>
+
+   {successMessage && (
+    <div
+     style={{
+      background: '#dcfce7',
+      color: '#166534',
+      borderRadius: '16px',
+      padding: '12px 18px',
+      fontSize: '0.85rem',
+      fontWeight: 600,
+      marginBottom: '18px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+     }}
+    >
+     <Check style={{ width: 16, height: 16 }} />
+     {successMessage}
+    </div>
+   )}
+
+   {message && <p className="form-error page-message">{message}</p>}
+
+   {pending.length > 0 && (
+    <section className="detail-panel">
+     <div className="panel-head">
+      <div>
+       <span className="kicker">Needs Teacher Approval</span>
+       <h2>
+        Waiting for confirmation <b>{pending.length}</b>
+       </h2>
+      </div>
+     </div>
+     {pending.map((p) => (
+      <div className="request-row" key={p.classId}>
+       <span className="avatar">{initials(p.className)}</span>
+       <div>
+        <b>{p.className}</b>
+        <small>
+         Code: <strong>{p.code}</strong> · Teacher: {p.teacherName}
+        </small>
+       </div>
+       <span
+        style={{
+         fontSize: '0.75rem',
+         color: '#92400e',
+         background: '#fef3c7',
+         padding: '4px 10px',
+         borderRadius: '999px',
+         display: 'inline-flex',
+         alignItems: 'center',
+         gap: '4px',
+         fontWeight: 600,
+        }}
+       >
+        <Clock3 style={{ width: 13, height: 13 }} /> Pending Review
+       </span>
+      </div>
+     ))}
+    </section>
+   )}
+
+   <section className="detail-panel classroom-page-list">
+    <div className="panel-head">
+     <div>
+      <span className="kicker">
+       {searchQuery
+        ? `${filtered.length} matching classroom${filtered.length === 1 ? '' : 's'}`
+        : `${unjoined.length} unjoined group${unjoined.length === 1 ? '' : 's'}`}
+      </span>
+      <h2>{searchQuery ? `Search results for "${searchQuery}"` : 'New Groups to Join'}</h2>
+     </div>
+    </div>
+
+    {filtered.length === 0 ? (
+     <div className="detail-empty">
+      <Search />
+      <h3>
+       {searchQuery
+        ? `No classrooms matching "${searchQuery}"`
+        : 'No new classrooms available to join'}
+      </h3>
+      <p>
+       {searchQuery
+        ? 'Check for typos or try searching with the 8-character class code.'
+        : 'You have joined all available classrooms, or none have been created yet.'}
+      </p>
+     </div>
+    ) : (
+     <div className="class-grid">
+      {filtered.map((c, i) => {
+       const isPending = pending.some((p) => p.classId === c.id);
+       const currentStudents = c.students || 0;
+       const maxCap = c.maxStudents || 30;
+       const isFull = currentStudents >= maxCap;
+       const isRequesting = requestBusyId === c.id;
+
+       return (
+        <div
+         key={c.id}
+         className={`class-card ${colours[i % 3]}`}
+         style={{
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'space-between',
+          minHeight: '235px',
+         }}
+        >
+         <div>
+          <div className="class-top" style={{ marginBottom: '8px' }}>
+           <span
+            style={{
+             fontSize: '0.78rem',
+             fontWeight: 800,
+             letterSpacing: '0.04em',
+             background: '#ffffffcc',
+             padding: '4px 10px',
+             borderRadius: '8px',
+             color: '#111',
+            }}
+           >
+            {c.code}
+           </span>
+           <span style={{ fontSize: '0.72rem', color: '#444', fontWeight: 600 }}>
+            {c.subject || 'General'}
+           </span>
+          </div>
+          <h3 style={{ margin: '8px 0 3px', fontSize: '1.25rem', fontWeight: 600 }}>
+           {c.name}
+          </h3>
+          <small style={{ color: '#555', fontSize: '0.8rem', display: 'block' }}>
+           Instructor: <strong>{c.teacherName || 'Teacher'}</strong>
+          </small>
+         </div>
+
+         <div
+          style={{
+           marginTop: '16px',
+           paddingTop: '12px',
+           borderTop: '1px solid rgba(0,0,0,0.06)',
+          }}
+         >
+          <div className="class-bottom" style={{ marginBottom: '10px' }}>
+           <span>
+            <Users style={{ width: 14, height: 14 }} /> {currentStudents} / {maxCap} learners
+           </span>
+           {isFull && (
+            <span style={{ color: '#dc2626', fontWeight: 700 }}>Full</span>
+           )}
+          </div>
+
+          {isPending ? (
+           <button
+            disabled
+            style={{
+             width: '100%',
+             height: '40px',
+             borderRadius: '12px',
+             background: '#ffffffaa',
+             border: '1px solid #ded8cf',
+             color: '#92400e',
+             fontSize: '0.82rem',
+             fontWeight: 700,
+             display: 'flex',
+             alignItems: 'center',
+             justifyContent: 'center',
+             gap: '6px',
+             cursor: 'not-allowed',
+            }}
+           >
+            <Clock3 style={{ width: 14, height: 14 }} /> Waiting for approval
+           </button>
+          ) : isFull ? (
+           <button
+            disabled
+            style={{
+             width: '100%',
+             height: '40px',
+             borderRadius: '12px',
+             background: '#ffffffaa',
+             border: '1px solid #ded8cf',
+             color: '#888',
+             fontSize: '0.82rem',
+             fontWeight: 700,
+             display: 'flex',
+             alignItems: 'center',
+             justifyContent: 'center',
+             cursor: 'not-allowed',
+            }}
+           >
+            Classroom Full
+           </button>
+          ) : (
+           <Button
+            onClick={() => requestJoin(c)}
+            disabled={isRequesting}
+            className="primary-action"
+            style={{
+             width: '100%',
+             height: '40px',
+             borderRadius: '12px',
+             fontSize: '0.82rem',
+             fontWeight: 700,
+             display: 'flex',
+             alignItems: 'center',
+             justifyContent: 'center',
+             gap: '6px',
+            }}
+           >
+            {isRequesting ? (
+             <LoaderCircle className="animate-spin" style={{ width: 15, height: 15 }} />
+            ) : (
+             <Plus style={{ width: 15, height: 15 }} />
+            )}
+            {isRequesting ? 'Sending request…' : 'Request to join'}
+           </Button>
+          )}
+         </div>
+        </div>
+       );
+      })}
+     </div>
+    )}
+   </section>
+
+   <Dialog open={joinOpen} onOpenChange={setJoinOpen}>
+    <DialogContent className="modal-card">
+     <DialogHeader>
+      <DialogTitle>Join a classroom</DialogTitle>
+      <DialogDescription>
+       Enter your class code. Your teacher will approve the request.
+      </DialogDescription>
+     </DialogHeader>
+     <label className="form-label">
+      Classroom code
+      <Input
+       value={joinCode}
+       onChange={(e) => {
+        setJoinCode(e.target.value.toUpperCase());
+        setMessage('');
+       }}
+       placeholder="e.g. MATH-4K2"
+      />
+     </label>
+     {message && <p className="form-error">{message}</p>}
+     <DialogFooter>
+      <Button variant="outline" onClick={() => setJoinOpen(false)}>
+       Cancel
+      </Button>
+      <Button
+       onClick={requestJoinByCode}
+       disabled={busy || !joinCode.trim()}
+      >
+       {busy ? <LoaderCircle className="animate-spin" /> : <Send />} Request to join
+      </Button>
+     </DialogFooter>
+    </DialogContent>
+   </Dialog>
+  </>
+ );
+}
+
 export function ClassroomsDetail({role,user,onOpen,onCountChange}:{role:Role;user:User;onOpen:(c:DetailClassroom)=>void;onCountChange:(count:number)=>void}){
- const {classes,memberships,pending}=useLearningSpaces(role,user);
- const [joinOpen,setJoinOpen]=useState(false),[createOpen,setCreateOpen]=useState(false),[joinCode,setJoinCode]=useState(''),[newName,setNewName]=useState(''),[newSubject,setNewSubject]=useState(''),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
- const count=role==='teacher'?classes.length:memberships.length;
+ if (role === 'student') {
+  return <StudentSearchDetail user={user} onCountChange={onCountChange} />;
+ }
+
+ const {classes,pending}=useLearningSpaces(role,user);
+ const [createOpen,setCreateOpen]=useState(false),[newName,setNewName]=useState(''),[newSubject,setNewSubject]=useState(''),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
+ const count=classes.length;
  useEffect(()=>onCountChange(count),[count,onCountChange]);
  const createClass=async()=>{if(!newName.trim()||!newSubject.trim()||classes.length>=3)return;setBusy(true);setMessage('');try{const code=`${newSubject.replace(/[^a-z0-9]/gi,'').slice(0,4).toUpperCase()||'CLAS'}-${Math.random().toString(36).slice(2,5).toUpperCase()}`;await addDoc(collection(db,'classrooms'),{name:newName.trim(),subject:newSubject.trim(),code,teacherId:user.uid,teacherName:user.displayName||'Teacher',students:0,maxStudents:30,progress:0,createdAt:serverTimestamp()});setNewName('');setNewSubject('');setCreateOpen(false)}catch{setMessage('Something went wrong. Please try again.')}finally{setBusy(false)}};
- const requestJoin=async()=>{setBusy(true);setMessage('');try{const code=joinCode.trim().toUpperCase(),found=await getDocs(query(collection(db,'classrooms'),where('code','==',code),limit(1)));if(found.empty){setMessage('Class code not found. Check the code and try again.');return}const c={id:found.docs[0].id,...found.docs[0].data()} as DetailClassroom;if((c.students||0)>=(c.maxStudents||30)){setMessage('This classroom is already full.');return}if(memberships.some(m=>m.classId===c.id)){setMessage('You already joined this classroom.');return}if(pending.some(p=>p.classId===c.id)){setMessage('Your request is already waiting for approval.');return}const data={classId:c.id,className:c.name,code:c.code,teacherId:c.teacherId,teacherName:c.teacherName,studentId:user.uid,studentName:user.displayName||'Student',studentEmail:user.email||'',createdAt:serverTimestamp()};const batch=writeBatch(db);batch.set(doc(db,'classrooms',c.id,'requests',user.uid),data);batch.set(doc(db,'users',user.uid,'joinRequests',c.id),data);await batch.commit();setJoinCode('');setJoinOpen(false)}catch{setMessage('Something went wrong. Please try again.')}finally{setBusy(false)}};
  const decide=async(r:JoinRequest,approve:boolean)=>{if(approve){const c=classes.find(x=>x.id===r.classId);if(c&&(c.students||0)>=(c.maxStudents||30)){setMessage(`${c.name} is already full.`);return}}const batch=writeBatch(db);batch.delete(doc(db,'classrooms',r.classId,'requests',r.studentId));batch.delete(doc(db,'users',r.studentId,'joinRequests',r.classId));if(approve){batch.set(doc(db,'classrooms',r.classId,'members',r.studentId),{uid:r.studentId,name:r.studentName,email:r.studentEmail,progress:0,joinedAt:serverTimestamp()});batch.set(doc(db,'users',r.studentId,'memberships',r.classId),{classId:r.classId,className:r.className,code:r.code,teacherId:user.uid,teacherName:user.displayName||'Teacher',progress:0,tasks:0,joinedAt:serverTimestamp()});batch.update(doc(db,'classrooms',r.classId),{students:increment(1)})}await batch.commit()};
- return <><header className="detail-page-head"><div><span className="kicker">{role==='teacher'?'Teaching spaces':'Learning spaces'}</span><h1>{role==='teacher'?'Your classrooms':'My classrooms'}</h1><p>{role==='teacher'?'Manage your classes and student access in one place.':'Open a class or request access using your teacher’s code.'}</p></div><Button className="primary-action" disabled={role==='teacher'&&classes.length>=3} onClick={()=>role==='teacher'?setCreateOpen(true):setJoinOpen(true)}><Plus/> {role==='teacher'?'Create classroom':'Join classroom'}</Button></header>{message&&<p className="form-error page-message">{message}</p>}{pending.length>0&&<section className="detail-panel"><div className="panel-head"><div><span className="kicker">{role==='teacher'?'Needs approval':'Pending access'}</span><h2>{role==='teacher'?'Join requests':'Waiting for teacher'} <b>{pending.length}</b></h2></div></div>{pending.map(r=><div className="request-row" key={`${r.classId}-${r.studentId}`}><span className="avatar">{initials(role==='teacher'?r.studentName:r.className)}</span><div><b>{role==='teacher'?r.studentName:r.className}</b><small>{role==='teacher'?`${r.className} · ${r.studentEmail}`:`Code ${r.code}`}</small></div>{role==='teacher'&&<><button className="decline" onClick={()=>decide(r,false)} aria-label="Decline"><X/></button><button className="approve" onClick={()=>decide(r,true)}><Check/> Approve</button></>}</div>)}</section>}<section className="detail-panel classroom-page-list"><div className="panel-head"><div><span className="kicker">{count} total</span><h2>{role==='teacher'?'All classrooms':'Active classrooms'}</h2></div></div>{count===0?<div className="detail-empty"><BookOpen/><h3>No classrooms yet</h3><p>{role==='teacher'?'Create your first classroom to begin.':'Join using a classroom code to begin.'}</p></div>:role==='teacher'?<div className="class-grid">{classes.map((c,i)=><button key={c.id} className={`class-card ${colours[i%3]}`} onClick={()=>onOpen(c)}><div className="class-top"><span>0{i+1}</span><ChevronRight/></div><div><small>{c.code} · {c.subject}</small><h3>{c.name}</h3></div><div><div className="class-bottom"><span><Users/> {c.students||0} learners</span><span>{c.progress||0}%</span></div><Progress value={c.progress||0}/></div></button>)}</div>:<div className="student-grid">{memberships.map((m,i)=><button key={m.classId} className={`student-class ${colours[i%3]}`} onClick={()=>onOpen({id:m.classId,name:m.className,subject:m.className,code:m.code,teacherId:m.teacherId,teacherName:m.teacherName,students:0,progress:m.progress||0})}><div className="subject-number">0{i+1}</div><div className="student-class-info"><small>{m.teacherName}</small><h3>{m.className}</h3><div className="task-line"><span>{m.tasks||0} tasks due</span><span>{m.progress||0}% mastered</span></div><Progress value={m.progress||0}/></div><ChevronRight/></button>)}</div>}</section><Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent className="modal-card"><DialogHeader><DialogTitle>Create a classroom</DialogTitle><DialogDescription>Start with an empty class and share its code with students.</DialogDescription></DialogHeader><label className="form-label">Classroom name<Input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="e.g. Mathematics · Form 4"/></label><label className="form-label">Subject<Input value={newSubject} onChange={e=>setNewSubject(e.target.value)} placeholder="e.g. Mathematics"/></label>{message&&<p className="form-error">{message}</p>}<DialogFooter><Button variant="outline" onClick={()=>setCreateOpen(false)}>Cancel</Button><Button onClick={createClass} disabled={busy||!newName.trim()||!newSubject.trim()}>{busy?<LoaderCircle/>:<Plus/>} Create</Button></DialogFooter></DialogContent></Dialog><Dialog open={joinOpen} onOpenChange={setJoinOpen}><DialogContent className="modal-card"><DialogHeader><DialogTitle>Join a classroom</DialogTitle><DialogDescription>Enter your class code. Your teacher will approve the request.</DialogDescription></DialogHeader><label className="form-label">Classroom code<Input value={joinCode} onChange={e=>{setJoinCode(e.target.value.toUpperCase());setMessage('')}} placeholder="e.g. MATH-4K2"/></label>{message&&<p className="form-error">{message}</p>}<DialogFooter><Button variant="outline" onClick={()=>setJoinOpen(false)}>Cancel</Button><Button onClick={requestJoin} disabled={busy||!joinCode.trim()}>{busy?<LoaderCircle/>:<Send/>} Request to join</Button></DialogFooter></DialogContent></Dialog></>;
+
+ return <><header className="detail-page-head"><div><span className="kicker">Teaching spaces</span><h1>Your classrooms</h1><p>Manage your classes and student access in one place.</p></div><Button className="primary-action" disabled={classes.length>=3} onClick={()=>setCreateOpen(true)}><Plus/> Create classroom</Button></header>{message&&<p className="form-error page-message">{message}</p>}{pending.length>0&&<section className="detail-panel"><div className="panel-head"><div><span className="kicker">Needs approval</span><h2>Join requests <b>{pending.length}</b></h2></div></div>{pending.map(r=><div className="request-row" key={`${r.classId}-${r.studentId}`}><span className="avatar">{initials(r.studentName)}</span><div><b>{r.studentName}</b><small>{r.className} · {r.studentEmail}</small></div><button className="decline" onClick={()=>decide(r,false)} aria-label="Decline"><X/></button><button className="approve" onClick={()=>decide(r,true)}><Check/> Approve</button></div>)}</section>}<section className="detail-panel classroom-page-list"><div className="panel-head"><div><span className="kicker">{count} total</span><h2>All classrooms</h2></div></div>{count===0?<div className="detail-empty"><BookOpen/><h3>No classrooms yet</h3><p>Create your first classroom to begin.</p></div>:<div className="class-grid">{classes.map((c,i)=><button key={c.id} className={`class-card ${colours[i%3]}`} onClick={()=>onOpen(c)}><div className="class-top"><span>0{i+1}</span><ChevronRight/></div><div><small>{c.code} · {c.subject}</small><h3>{c.name}</h3></div><div><div className="class-bottom"><span><Users/> {c.students||0} learners</span><span>{c.progress||0}%</span></div><Progress value={c.progress||0}/></div></button>)}</div>}</section><Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent className="modal-card"><DialogHeader><DialogTitle>Create a classroom</DialogTitle><DialogDescription>Start with an empty class and share its code with students.</DialogDescription></DialogHeader><label className="form-label">Classroom name<Input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="e.g. Mathematics · Form 4"/></label><label className="form-label">Subject<Input value={newSubject} onChange={e=>setNewSubject(e.target.value)} placeholder="e.g. Mathematics"/></label>{message&&<p className="form-error">{message}</p>}<DialogFooter><Button variant="outline" onClick={()=>setCreateOpen(false)}>Cancel</Button><Button onClick={createClass} disabled={busy||!newName.trim()||!newSubject.trim()}>{busy?<LoaderCircle/>:<Plus/>} Create</Button></DialogFooter></DialogContent></Dialog></>;
 }
 
 export function ProgressDetail({role,user,onOpen,onCountChange}:{role:Role;user:User;onOpen:(c:DetailClassroom)=>void;onCountChange:(count:number)=>void}){
