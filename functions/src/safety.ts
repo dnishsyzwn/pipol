@@ -17,11 +17,10 @@ export function assertImagePromptAllowed(prompt: string): void {
   }
 }
 
-export function assertGenerationInput(prompt: string, subject?: string, level?: string): void {
+export function assertGenerationInput(prompt: string, subject?: string): void {
   if (!prompt.trim() && !subject?.trim()) invalid('Add a topic, instruction, or source material before generating.');
   if (prompt.length > 4000) invalid('The teacher instruction is too long.');
   if (prompt.includes('\u0000')) invalid('The teacher instruction contains invalid characters.');
-  if (!level?.trim()) invalid('Select the learner level so the content can be calibrated safely.');
 }
 
 export function markSensitiveReview(text: string): boolean {

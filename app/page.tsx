@@ -69,7 +69,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { auth, db, functions, googleProvider, storage } from '@/lib/firebase';
+import { auth, db, functions, googleProvider, initializeSlearnAppCheck, storage } from '@/lib/firebase';
 import { ClassroomsDetail, ProgressDetail } from './detail-pages';
 
 type Role = 'teacher' | 'student';
@@ -111,6 +111,7 @@ type QuestionItem = {
   answer: string;
   points: number;
   enhanced: boolean;
+  difficulty?: 'easy' | 'medium' | 'hard';
   loading?: boolean;
 };
 type QuestionResult = {
@@ -4365,6 +4366,7 @@ function QuizBuilder({
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [questionCount, setQuestionCount] = useState(5);
   const [imageCount, setImageCount] = useState(0);
+  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | 'mixed'>('medium');
   const [generating, setGenerating] = useState(false);
   const [generationStatus, setGenerationStatus] = useState('');
   const [quota, setQuota] = useState({ questionsUsed: 0, imagesUsed: 0 });
@@ -4454,7 +4456,7 @@ function QuizBuilder({
         imageMode: 'none',
         subject: classroom.subject,
         language: 'English',
-        difficulty: 'medium',
+        difficulty,
         questionTypes: ['short_answer'],
         learningObjectives: [],
       });
@@ -4467,9 +4469,9 @@ function QuizBuilder({
         }, reject);
       });
       const draft = await getDoc(doc(db, 'quizDrafts', String(job.draftId)));
-      const generated = (draft.data()?.questions ?? [])[0] as { question?: string; correctAnswer?: string } | undefined;
+      const generated = (draft.data()?.questions ?? [])[0] as { question?: string; correctAnswer?: string; difficulty?: 'easy' | 'medium' | 'hard' } | undefined;
       if (!generated?.question) throw new Error('No question was generated. Please try again.');
-      setQuestions((current) => current.map((question, index) => index === quickGenerateIndex ? { ...question, question: generated.question || '', answer: generated.correctAnswer || '', enhanced: true } : question));
+      setQuestions((current) => current.map((question, index) => index === quickGenerateIndex ? { ...question, question: generated.question || '', answer: generated.correctAnswer || '', difficulty: generated.difficulty, enhanced: true } : question));
       setQuickGenerateIndex(null);
       setQuickPrompt('');
     } catch (error) {
@@ -4507,7 +4509,7 @@ function QuizBuilder({
         imageMode: imageCount > 0 ? 'generate' : 'none',
         subject: classroom.subject,
         language: 'English',
-        difficulty: 'medium',
+        difficulty,
         questionTypes: ['multiple_choice', 'short_answer'],
         learningObjectives: [],
       });
@@ -4520,10 +4522,11 @@ function QuizBuilder({
         }, reject);
       });
       const draft = await getDoc(doc(db, 'quizDrafts', String(job.draftId)));
-      const generated = (draft.data()?.questions ?? []) as Array<{ id?: string; question: string; correctAnswer: string }>;
-      setQuestions(generated.map((question, index) => ({ id: question.id || `ai-${index}`, question: question.question, answer: question.correctAnswer, points: 2, enhanced: true })));
+      const generated = (draft.data()?.questions ?? []) as Array<{ id?: string; question: string; correctAnswer: string; difficulty?: 'easy' | 'medium' | 'hard' }>;
+      setQuestions(generated.map((question, index) => ({ id: question.id || `ai-${index}`, question: question.question, answer: question.correctAnswer, points: 2, enhanced: true, difficulty: question.difficulty })));
       if (!title.trim() && draft.data()?.title) setTitle(String(draft.data()?.title));
-      setGenerationStatus(`Draft ready: ${generated.length} questions${imageCount ? ` and ${imageCount} images` : ''}. Review before publishing.`);
+      const inferredLevel = String(draft.data()?.level || 'General education');
+      setGenerationStatus(`Draft ready for ${inferredLevel}: ${generated.length} questions${imageCount ? ` and ${imageCount} images` : ''}. Review before publishing.`);
     } catch (error) {
       setGenerationStatus(error instanceof Error ? error.message : 'AI generation failed.');
     } finally {
@@ -4548,6 +4551,7 @@ function QuizBuilder({
           answer: q.answer.trim(),
           points: q.points,
           enhanced: q.enhanced,
+          difficulty: q.difficulty || 'medium',
         })),
         questionCount: questions.length,
         enhanced: hasEnhancedAny,
@@ -4789,6 +4793,7 @@ function QuizBuilder({
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: '1rem', marginTop: '1rem', alignItems: 'end' }}>
           <label className="form-label">Questions<Input type="number" min={1} max={Math.min(15, Math.max(1, 15 - quota.questionsUsed))} value={questionCount} onChange={(event) => setQuestionCount(Math.max(1, Math.min(15, Number(event.target.value) || 1)))}/></label>
+          <label className="form-label">Difficulty<select value={difficulty} onChange={(event) => setDifficulty(event.target.value as 'easy' | 'medium' | 'hard' | 'mixed')} style={{ width: '100%', height: 40, border: '1px solid #dce5dc', borderRadius: 10, padding: '0 .75rem', background: '#fff' }}><option value="easy">Easy</option><option value="medium">Moderate</option><option value="hard">Hard</option><option value="mixed">Randomized mix</option></select></label>
           <label className="form-label">AI-generated images<Input type="number" min={0} max={Math.min(5, Math.max(0, 5 - quota.imagesUsed))} value={imageCount} onChange={(event) => setImageCount(Math.max(0, Math.min(5, Number(event.target.value) || 0)))}/></label>
           <Button type="button" onClick={generateWithAi} disabled={generating || questionCount > Math.max(0, 15 - quota.questionsUsed) || imageCount > Math.max(0, 5 - quota.imagesUsed)} className="primary-action">{generating ? <LoaderCircle/> : <WandSparkles/>}{generating ? 'Generating draft…' : 'Generate editable draft'}</Button>
         </div>
@@ -4811,6 +4816,7 @@ function QuizBuilder({
             >
               <div className="question-count">
                 <span>Question 0{idx + 1}</span>
+                {q.difficulty && <span style={{ marginLeft: 'auto', marginRight: questions.length > 1 ? '.5rem' : 0, padding: '.25rem .55rem', borderRadius: 999, background: q.difficulty === 'easy' ? '#edf7df' : q.difficulty === 'hard' ? '#ffe1dc' : '#fff0d4', fontSize: '.7rem', textTransform: 'capitalize' }}>{q.difficulty}</span>}
                 {questions.length > 1 && (
                   <button
                     type="button"
@@ -4993,6 +4999,9 @@ export default function Home() {
     [selectedExercise, setSelectedExercise] = useState<any | null>(null),
     [detailCount, setDetailCount] = useState(0),
     [, setProfileVersion] = useState(0);
+  useEffect(() => {
+    void initializeSlearnAppCheck();
+  }, []);
   useEffect(
     () =>
       onAuthStateChanged(auth, async (current) => {
