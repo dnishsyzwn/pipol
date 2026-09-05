@@ -32,6 +32,14 @@ service firebase.storage {
       allow write: if false;
     }
 
+    match /users/{uid}/profile/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }
