@@ -59,9 +59,13 @@ service cloud.firestore {
 
       match /memberships/{classId} {
         allow read: if signedIn() && request.auth.uid == userId;
-        allow create, update: if ownsClassroom(classId)
+        allow create: if ownsClassroom(classId)
           && request.resource.data.teacherId == request.auth.uid
           && request.resource.data.classId == classId;
+        allow update: if (ownsClassroom(classId)
+            && request.resource.data.teacherId == request.auth.uid
+            && request.resource.data.classId == classId)
+          || (signedIn() && request.auth.uid == userId);
         allow delete: if ownsClassroom(classId);
       }
     }
@@ -96,6 +100,15 @@ service cloud.firestore {
         allow read: if signedIn()
           && (ownsClassroom(classroomId) || isActiveMember(classroomId));
         allow write: if ownsClassroom(classroomId);
+
+        match /submissions/{submissionId} {
+          allow read: if signedIn()
+            && (request.auth.uid == resource.data.studentId || ownsClassroom(classroomId));
+          allow create: if signedIn()
+            && request.auth.uid == request.resource.data.studentId;
+          allow update, delete: if signedIn()
+            && (request.auth.uid == resource.data.studentId || ownsClassroom(classroomId));
+        }
       }
     }
 
