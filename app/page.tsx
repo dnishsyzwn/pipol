@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
 import type { User } from 'firebase/auth';
-import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
 import {
   addDoc,
   collection,
@@ -22,7 +22,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { ref, uploadBytes } from 'firebase/storage';
+import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import {
   AlertCircle,
   ArrowLeft,
@@ -31,6 +31,7 @@ import {
   BookOpen,
   Bot,
   Calendar,
+  Camera,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -44,7 +45,6 @@ import {
   Lock,
   LogIn,
   LogOut,
-  Menu,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -458,7 +458,7 @@ function LoginPage({
     </main>
   );
 }
-type NavTarget = 'overview' | 'classes' | 'quiz' | 'progress';
+type NavTarget = 'overview' | 'classes' | 'progress';
 function AppShell({
   role,
   user,
@@ -476,36 +476,30 @@ function AppShell({
   active?: View;
   classCount?: number;
 }) {
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileName, setProfileName] = useState(user.displayName || '');
+  const [profilePhoto, setProfilePhoto] = useState(user.photoURL || '');
+  const [profileFile, setProfileFile] = useState<File | null>(null);
+  const [profilePreview, setProfilePreview] = useState(user.photoURL || '');
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  useEffect(() => { if (!profileFile) { setProfilePreview(profilePhoto); return; } const url = URL.createObjectURL(profileFile); setProfilePreview(url); return () => URL.revokeObjectURL(url); }, [profileFile, profilePhoto]);
   const go = (target: NavTarget) => {
     if (onNavigate) {
       onNavigate(target);
       return;
     }
-    if (target === 'overview') window.scrollTo({ top: 0, behavior: 'smooth' });
-    else if (target === 'classes')
-      (
-        document.querySelector(
-          '#classrooms,.classroom-title',
-        ) as HTMLElement | null
-      )?.scrollIntoView({ behavior: 'smooth' });
-    else if (target === 'progress')
-      (
-        document.querySelector(
-          '#progress,.class-stats,.analytics-summary-grid',
-        ) as HTMLElement | null
-      )?.scrollIntoView({ behavior: 'smooth' });
-    else if (target === 'quiz')
-      (
-        document.querySelector(
-          '.classroom-actions button,.primary-action',
-        ) as HTMLButtonElement | null
-      )?.click();
+    window.dispatchEvent(new CustomEvent<NavTarget>('slearn:navigate', { detail: target }));
   };
+  const openProfile = () => { setProfileName(user.displayName || ''); setProfilePhoto(user.photoURL || ''); setProfileFile(null); setProfileError(''); setProfileOpen(true); };
+  const choosePhoto = (file?: File) => { if (!file) return; if (file.size > 5 * 1024 * 1024) { setProfileError('Please choose an image smaller than 5 MB.'); return; } if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setProfileError('Please choose a JPG, PNG or WebP image.'); return; } setProfileError(''); setProfileFile(file); };
+  const saveProfile = async () => { const cleanName = profileName.trim(); if (!cleanName) { setProfileError('Please enter your name.'); return; } setProfileSaving(true); setProfileError(''); try { let photoURL = profilePhoto; if (profileFile) { const extension = profileFile.type === 'image/png' ? 'png' : profileFile.type === 'image/webp' ? 'webp' : 'jpg'; const photoRef = ref(storage, `users/${user.uid}/profile/avatar-${Date.now()}.${extension}`); await uploadBytes(photoRef, profileFile, { contentType: profileFile.type }); photoURL = await getDownloadURL(photoRef); } await updateProfile(user, { displayName: cleanName, photoURL: photoURL || null }); await setDoc(doc(db, 'users', user.uid), { displayName: cleanName, photoURL: photoURL || '', updatedAt: serverTimestamp() }, { merge: true }); setProfileName(cleanName); setProfilePhoto(photoURL || ''); setProfileFile(null); window.dispatchEvent(new Event('slearn:profile-updated')); setProfileOpen(false); } catch (error) { setProfileError(friendlyError(error)); } finally { setProfileSaving(false); } };
+  const avatar = () => <span>{profilePhoto ? <img src={profilePhoto} alt="" /> : initials(profileName || user.displayName)}</span>;
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <Brand />
-        <nav>
+        <nav aria-label="Main navigation">
           <button
             className={active === 'dashboard' ? 'active' : ''}
             onClick={() => go('overview')}
@@ -515,7 +509,7 @@ function AppShell({
             <span>Overview</span>
           </button>
           <button
-            className={active === 'classroom' ? 'active' : ''}
+            className={active === 'classroom' || active === 'quiz' || active === 'exercise' ? 'active' : ''}
             onClick={() => go('classes')}
             title="Classrooms"
           >
@@ -523,29 +517,19 @@ function AppShell({
             <span>Classrooms</span>
             <b>{classCount}</b>
           </button>
-          {role === 'teacher' && (
-            <button
-              className={active === 'quiz' ? 'active' : ''}
-              onClick={() => go('quiz')}
-              title="Quiz studio"
-            >
-              <FileQuestion />
-              <span>Quiz studio</span>
-            </button>
-          )}
           <button onClick={() => go('progress')} title="Progress">
             <BarChart3 />
             <span>Progress</span>
           </button>
         </nav>
         <div className="sidebar-foot">
-          <div className="mini-profile">
-            <span>{initials(user.displayName)}</span>
+          <button type="button" className="mini-profile profile-trigger" onClick={openProfile} aria-label="Edit profile" title="Edit profile">
+            {avatar()}
             <div>
-              <b>{user.displayName || 'SLearn user'}</b>
+              <b>{profileName || 'SLearn user'}</b>
               <small>{role}</small>
             </div>
-          </div>
+          </button>
           <button onClick={onExit} aria-label="Sign out" title="Sign out">
             <LogOut />
           </button>
@@ -553,9 +537,10 @@ function AppShell({
       </aside>
       <div className="mobile-bar">
         <Brand />
-        <Menu />
+        <button type="button" className="mobile-profile" onClick={openProfile} aria-label="Edit profile">{avatar()}</button>
       </div>
       <section className="main-stage">{children}</section>
+      <Dialog open={profileOpen} onOpenChange={setProfileOpen}><DialogContent className="modal-card profile-modal"><DialogHeader><DialogTitle>Edit your profile</DialogTitle><DialogDescription>Update how your name and photo appear in SLearn.</DialogDescription></DialogHeader><div className="profile-editor"><div className="profile-photo-preview">{profilePreview ? <img src={profilePreview} alt="Profile preview" /> : <span>{initials(profileName)}</span>}<label title="Choose profile picture"><Camera/><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0])}/></label></div><label className="form-label">Display name<Input value={profileName} maxLength={60} onChange={(event) => setProfileName(event.target.value)} placeholder="Your name"/></label><p className="profile-help">JPG, PNG or WebP · maximum 5 MB</p>{profileError && <p className="auth-error">{profileError}</p>}</div><DialogFooter><Button variant="outline" onClick={() => setProfileOpen(false)} disabled={profileSaving}>Cancel</Button><Button className="primary-action" onClick={saveProfile} disabled={profileSaving}>{profileSaving ? <><LoaderCircle/> Saving…</> : <><Check/> Save profile</>}</Button></DialogFooter></DialogContent></Dialog>
     </div>
   );
 }
@@ -4766,7 +4751,8 @@ export default function Home() {
     [error, setError] = useState(''),
     [view, setView] = useState<View>('dashboard'),
     [selectedClass, setSelectedClass] = useState<ClassroomData | null>(null),
-    [selectedExercise, setSelectedExercise] = useState<any | null>(null);
+    [selectedExercise, setSelectedExercise] = useState<any | null>(null),
+    [, setProfileVersion] = useState(0);
   useEffect(
     () =>
       onAuthStateChanged(auth, async (current) => {
@@ -4779,6 +4765,13 @@ export default function Home() {
       }),
     [],
   );
+  useEffect(() => {
+    const navigate = (event: Event) => { const target = (event as CustomEvent<NavTarget>).detail; setView('dashboard'); setSelectedClass(null); setSelectedExercise(null); setTimeout(() => { if (target === 'overview') window.scrollTo({ top: 0, behavior: 'smooth' }); else document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 40); };
+    const refreshProfile = () => setProfileVersion((version) => version + 1);
+    window.addEventListener('slearn:navigate', navigate);
+    window.addEventListener('slearn:profile-updated', refreshProfile);
+    return () => { window.removeEventListener('slearn:navigate', navigate); window.removeEventListener('slearn:profile-updated', refreshProfile); };
+  }, []);
   const authenticate = async (
     selectedRole: Role | null,
     mode: 'signup' | 'login',
