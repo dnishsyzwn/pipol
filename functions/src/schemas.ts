@@ -17,38 +17,46 @@ export const ImageModeSchema = z.enum(['none', 'upload', 'generate']);
 export const SourceReferenceSchema = z.object({
   materialId: z.string().min(1).max(160),
   fileName: z.string().min(1).max(255),
-  page: z.number().int().positive().optional(),
-  slide: z.number().int().positive().optional(),
-  sectionTitle: z.string().max(300).optional(),
+  page: z.number().int().positive().nullish().transform((value) => value ?? undefined),
+  slide: z.number().int().positive().nullish().transform((value) => value ?? undefined),
+  sectionTitle: z.string().max(300).nullish().transform((value) => value ?? undefined),
 });
 
 export const QuizQuestionSchema = z.object({
   id: z.string().min(1).max(100),
   type: QuestionTypeSchema,
   question: z.string().min(3).max(4000),
-  choices: z.array(z.string().min(1).max(500)).min(2).max(8).optional(),
+  choices: z
+    .array(z.string().max(500))
+    .max(8)
+    .nullish()
+    .transform((choices) => {
+      const cleaned = choices?.map((choice) => choice.trim()).filter(Boolean);
+      return cleaned?.length ? cleaned : undefined;
+    }),
   correctAnswer: z.string().min(1).max(1000),
   explanation: z.string().min(1).max(4000),
   hints: z.array(z.string().min(1).max(1000)).max(5),
   difficulty: DifficultySchema,
-  learningObjective: z.string().max(500).optional(),
-  sourceReference: SourceReferenceSchema.optional(),
+  learningObjective: z.string().max(500).nullish().transform((value) => value ?? undefined),
+  sourceReference: SourceReferenceSchema.nullish().transform((value) => value ?? undefined),
   confidence: z.enum(['high', 'medium', 'low']),
   needsReview: z.boolean(),
   visual: z
     .object({
       mode: ImageModeSchema,
-      assetId: z.string().max(160).optional(),
-      altText: z.string().max(1000).optional(),
-      purpose: z.string().max(1000).optional(),
-      status: z.enum(['pending', 'ready', 'rejected']).optional(),
+      assetId: z.string().max(160).nullish().transform((value) => value ?? undefined),
+      altText: z.string().max(1000).nullish().transform((value) => value ?? undefined),
+      purpose: z.string().max(1000).nullish().transform((value) => value ?? undefined),
+      status: z.enum(['pending', 'ready', 'rejected']).nullish().transform((value) => value ?? undefined),
     })
-    .optional(),
+    .nullish()
+    .transform((value) => value ?? undefined),
 });
 
 export const GeneratedQuizSchema = z.object({
   title: z.string().min(1).max(300),
-  instructions: z.string().max(2000).optional(),
+  instructions: z.string().max(2000).nullish().transform((value) => value ?? undefined),
   inferredLevel: z.string().min(1).max(100),
   learningObjectives: z.array(z.string().min(1).max(500)).max(10),
   questions: z.array(QuizQuestionSchema).min(1).max(30),
@@ -122,7 +130,12 @@ export function normalizeQuestion(question: QuizQuestion): QuizQuestion {
     hints: question.hints.map((hint) => hint.trim()).filter(Boolean),
     ...(choices?.length ? { choices } : {}),
   };
-  if (normalized.type === 'multiple_choice' && !normalized.choices?.includes(normalized.correctAnswer)) {
+  if (
+    normalized.type === 'multiple_choice' &&
+    (!normalized.choices ||
+      normalized.choices.length < 2 ||
+      !normalized.choices.includes(normalized.correctAnswer))
+  ) {
     return { ...normalized, needsReview: true, confidence: 'low' };
   }
   return normalized;
