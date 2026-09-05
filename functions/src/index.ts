@@ -14,6 +14,7 @@ import {
   AttemptSchema,
   CreateMaterialSchema,
   CreateQuizJobSchema,
+  EnhanceStandaloneQuestionSchema,
   GeneratedQuizSchema,
   PublishDraftSchema,
   QuizQuestionSchema,
@@ -136,7 +137,8 @@ export const createQuizGenerationJob = onCall(
     assertGenerationInput(input.prompt, input.subject, input.level);
     await requireClassroomOwner(input.classroomId, auth.uid);
     if (!input.prompt.trim() && input.materialIds.length === 0) invalid('Add a prompt or learning material.');
-    const reservation = await reserveQuota(auth.uid, input.questionCount, 0);
+    const requestedImages = input.imageMode === 'generate' ? input.imageCount : 0;
+    const reservation = await reserveQuota(auth.uid, input.questionCount, requestedImages);
     const jobRef = db.collection('quizJobs').doc();
     await jobRef.set({
       ownerId: auth.uid,
@@ -154,7 +156,7 @@ export const createQuizGenerationJob = onCall(
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
-    return { jobId: jobRef.id, status: 'queued' as const, quota: { questionsReserved: input.questionCount, imagesReserved: 0 } };
+    return { jobId: jobRef.id, status: 'queued' as const, quota: { questionsReserved: input.questionCount, imagesReserved: requestedImages } };
   },
 );
 
@@ -201,6 +203,19 @@ export const processQuizGenerationJob = onDocumentCreated(
         needsReview: question.needsReview || markSensitiveReview(`${question.question} ${question.explanation}`),
       }));
       const draftRef = db.collection('quizDrafts').doc();
+      const requestedImages = settings.imageMode === 'generate' ? Math.min(Number(settings.imageCount ?? 0), questions.length) : 0;
+      let generatedImages = 0;
+      for (let index = 0; index < requestedImages; index += 1) {
+        const question = questions[index];
+        if (!question) continue;
+        const image = await generateImage(`Educational visual for this quiz question: ${question.question}`, String(settings.level ?? 'general education'));
+        const assetId = db.collection('quizAssets').doc().id;
+        const storagePath = `users/${job.ownerId}/quiz-assets/${draftRef.id}/${assetId}.png`;
+        await bucket.file(storagePath).save(image.bytes, { resumable: false, metadata: { contentType: image.contentType, metadata: { ownerId: String(job.ownerId), draftId: draftRef.id } } });
+        await db.collection('quizAssets').doc(assetId).set({ ownerId: job.ownerId, draftId: draftRef.id, storagePath, contentType: image.contentType, createdAt: FieldValue.serverTimestamp() });
+        questions[index] = { ...question, visual: { mode: 'generate', assetId, purpose: 'AI-generated educational visual', status: 'ready', altText: `Educational visual for: ${question.question}` } };
+        generatedImages += 1;
+      }
       await draftRef.set({
         ownerId: job.ownerId,
         classroomId: job.classroomId,
@@ -219,8 +234,8 @@ export const processQuizGenerationJob = onDocumentCreated(
       });
       const reservationData = job.reservation as { periodKey: string; questions: number; images: number };
       reservation = { ref: db.collection('usage').doc(`${job.ownerId}_${reservationData.periodKey}`), periodKey: reservationData.periodKey, questions: reservationData.questions, images: reservationData.images };
-      await settleQuota(reservation, questions.length, 0);
-      await jobRef.update({ status: 'completed', draftId: draftRef.id, questionsGenerated: questions.length, updatedAt: FieldValue.serverTimestamp() });
+      await settleQuota(reservation, questions.length, generatedImages);
+      await jobRef.update({ status: 'completed', draftId: draftRef.id, questionsGenerated: questions.length, imagesGenerated: generatedImages, updatedAt: FieldValue.serverTimestamp() });
       console.info('Quiz job completed', { jobId, draftId: draftRef.id, questions: questions.length });
     } catch (error) {
       try {
@@ -313,6 +328,34 @@ export const generateQuestionVisual = onCall(
       await draft.ref.update({ questions, updatedAt: FieldValue.serverTimestamp() });
       await settleQuota(reservation, 0, 1);
       return { assetId, status: 'ready' as const };
+    } catch (error) {
+      await refundReservation(reservation);
+      throw error;
+    }
+  },
+);
+
+export const enhanceStandaloneQuestion = onCall(
+  { secrets: providerSecrets, timeoutSeconds: 120 },
+  async (request) => {
+    const auth = await requireTeacher(request);
+    const input = data(request, EnhanceStandaloneQuestionSchema);
+    const reservation = await reserveQuota(auth.uid, 1, 0);
+    try {
+      const question: QuizQuestion = {
+        id: randomUUID(),
+        type: 'short_answer',
+        question: input.question,
+        correctAnswer: input.answer || 'Teacher review required.',
+        explanation: input.answer || 'Teacher review required.',
+        hints: [],
+        difficulty: 'medium',
+        confidence: 'low',
+        needsReview: true,
+      };
+      const enhanced = QuizQuestionSchema.parse(await transformQuestion(question, 'Rewrite this into a clear, contextual educational question. Improve the answer and explanation. Do not merely append instructions.', input.language));
+      await settleQuota(reservation, 1, 0);
+      return { question: { ...enhanced, id: question.id, needsReview: true } };
     } catch (error) {
       await refundReservation(reservation);
       throw error;

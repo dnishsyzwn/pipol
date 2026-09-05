@@ -72,6 +72,13 @@ export const CreateQuizJobSchema = z.object({
   questionTypes: z.array(QuestionTypeSchema).min(1).max(5).default(['multiple_choice', 'short_answer']),
   learningObjectives: z.array(z.string().max(500)).max(10).default([]),
   imageMode: ImageModeSchema.default('none'),
+  imageCount: z.number().int().min(0).max(5).default(0),
+});
+
+export const EnhanceStandaloneQuestionSchema = z.object({
+  question: z.string().min(3).max(4000),
+  answer: z.string().max(1000).default('Teacher review required.'),
+  language: z.string().max(80).default('English'),
 });
 
 export const UpdateDraftSchema = z.object({
