@@ -731,10 +731,10 @@ function AppShell({
           <button
             className={active === 'classes' || active === 'classroom' || active === 'quiz' || active === 'exercise' ? 'active' : ''}
             onClick={() => go('classes')}
-            title="Classrooms"
+            title={role === 'student' ? 'Search Classrooms' : 'Classrooms'}
           >
-            <BookOpen />
-            <span>Classrooms</span>
+            {role === 'student' ? <Search /> : <BookOpen />}
+            <span>{role === 'student' ? 'Search' : 'Classrooms'}</span>
             <b>{classCount}</b>
           </button>
           <button className={active === 'progress' ? 'active' : ''} onClick={() => go('progress')} title="Progress">
@@ -1613,12 +1613,23 @@ function StudentDashboard({
               <span className="kicker">Your learning spaces</span>
               <h2>My classrooms</h2>
             </div>
-            <Button
-              onClick={() => setJoinOpen(true)}
-              className="primary-action"
-            >
-              <Plus /> Join classroom
-            </Button>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <Button
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent<NavTarget>('slearn:navigate', { detail: 'classes' }));
+                }}
+                className="primary-action"
+              >
+                <Search /> Find classrooms
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setJoinOpen(true)}
+                style={{ borderRadius: '999px', height: '42px', fontSize: '0.85rem' }}
+              >
+                <Plus /> Enter code
+              </Button>
+            </div>
           </div>
           <div id="classrooms" className="student-grid">
             {memberships.map((m, i) => (
@@ -5060,11 +5071,32 @@ export default function Home() {
         userResult = result.user;
       } else {
         if (action.mode === 'signup') {
-          const result = await createUserWithEmailAndPassword(auth, action.email!, action.password!);
-          if (action.name?.trim()) {
-            await updateProfile(result.user, { displayName: action.name.trim() }).catch(() => {});
+          try {
+            const result = await createUserWithEmailAndPassword(auth, action.email!, action.password!);
+            if (action.name?.trim()) {
+              await updateProfile(result.user, { displayName: action.name.trim() }).catch(() => {});
+            }
+            userResult = result.user;
+          } catch (signUpErr: any) {
+            if (signUpErr?.message?.includes('email-already-in-use') || signUpErr?.code === 'auth/email-already-in-use') {
+              try {
+                const signInRes = await signInWithEmailAndPassword(auth, action.email!, action.password!);
+                const checkSnap = await getDoc(doc(db, 'users', signInRes.user.uid));
+                if (!checkSnap.exists() || !checkSnap.data()?.role) {
+                  if (action.name?.trim()) {
+                    await updateProfile(signInRes.user, { displayName: action.name.trim() }).catch(() => {});
+                  }
+                  userResult = signInRes.user;
+                } else {
+                  throw signUpErr;
+                }
+              } catch {
+                throw signUpErr;
+              }
+            } else {
+              throw signUpErr;
+            }
           }
-          userResult = result.user;
         } else {
           const result = await signInWithEmailAndPassword(auth, action.email!, action.password!);
           userResult = result.user;
@@ -5077,22 +5109,21 @@ export default function Home() {
       const existingRole = data?.role as Role | undefined;
 
       if (action.mode === 'login') {
-        if (!existingSnap.exists() || !existingRole) {
-          await signOut(auth);
-          throw new Error('No SLearn account was found for this user. Please choose Sign up first.');
-        }
+        const effectiveRole: Role = existingRole || action.role || 'student';
         await setDoc(
           userRef,
           {
-            displayName: userResult.displayName || data?.displayName || action.name || '',
+            displayName: userResult.displayName || data?.displayName || action.name || userResult.email?.split('@')[0] || 'Learner',
             email: userResult.email || data?.email || action.email || '',
             photoURL: userResult.photoURL || data?.photoURL || '',
+            role: effectiveRole,
             lastLoginAt: serverTimestamp(),
+            ...(existingSnap.exists() ? {} : { createdAt: serverTimestamp() }),
           },
           { merge: true },
         );
         setUser(userResult);
-        setRole(existingRole);
+        setRole(effectiveRole);
         setView('dashboard');
         return;
       }
