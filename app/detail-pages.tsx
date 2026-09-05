@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
-import { addDoc, collection, doc, getDocs, increment, limit, onSnapshot, query, serverTimestamp, writeBatch, where } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, getDocs, increment, limit, onSnapshot, query, serverTimestamp, setDoc, writeBatch, where } from 'firebase/firestore';
 import { BarChart3, BookOpen, Check, ChevronRight, Clock3, LoaderCircle, Plus, Send, Users, X } from 'lucide-react';
 import { db } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,40 @@ function useLearningSpaces(role:Role,user:User){
  useEffect(()=>role==='teacher'?onSnapshot(query(collection(db,'classrooms'),where('teacherId','==',user.uid)),s=>setClasses(s.docs.map(d=>({id:d.id,...d.data()} as DetailClassroom)))):onSnapshot(collection(db,'users',user.uid,'memberships'),s=>setMemberships(s.docs.map(d=>({id:d.id,...d.data()} as Membership)))),[role,user.uid]);
  useEffect(()=>{if(role!=='student')return;return onSnapshot(collection(db,'users',user.uid,'joinRequests'),s=>setPending(s.docs.map(d=>({id:d.id,...d.data()} as JoinRequest))))},[role,user.uid]);
  useEffect(()=>{if(role!=='teacher'){return}const groups=new Map<string,JoinRequest[]>();const unsubs=classes.map(c=>onSnapshot(collection(db,'classrooms',c.id,'requests'),s=>{groups.set(c.id,s.docs.map(d=>({id:d.id,...d.data()} as JoinRequest)));setPending([...groups.values()].flat())}));if(!classes.length)setPending([]);return()=>unsubs.forEach(unsub=>unsub())},[role,classes.map(c=>c.id).join('|')]);
+ useEffect(()=>{
+  if(role!=='student'||!memberships.length)return;
+  const unsubs=memberships.map(m=>{
+   return onSnapshot(collection(db,'classrooms',m.classId,'exercises'),async(snap)=>{
+    const exDocs=snap.docs;
+    const total=exDocs.length;
+    if(total===0){
+     setMemberships(prev=>prev.map(item=>item.classId===m.classId?{...item,progress:0,tasks:0}:item));
+     if(m.progress!==0||m.tasks!==0){
+      setDoc(doc(db,'users',user.uid,'memberships',m.classId),{progress:0,tasks:0},{merge:true}).catch(console.warn);
+     }
+     return;
+    }
+    const checks=await Promise.all(exDocs.map(async(exDoc)=>{
+     try{
+      const subDoc=await getDoc(doc(db,'classrooms',m.classId,'exercises',exDoc.id,'submissions',user.uid));
+      if(subDoc.exists())return true;
+      const qSnap=await getDocs(query(collection(db,'classrooms',m.classId,'exercises',exDoc.id,'submissions'),where('studentId','==',user.uid),limit(1)));
+      return !qSnap.empty;
+     }catch{
+      return false;
+     }
+    }));
+    const completed=checks.filter(Boolean).length;
+    const tasksDue=Math.max(0,total-completed);
+    const progressPct=total>0?Math.round((completed/total)*100):0;
+    setMemberships(prev=>prev.map(item=>item.classId===m.classId?{...item,progress:progressPct,tasks:tasksDue}:item));
+    if(m.progress!==progressPct||m.tasks!==tasksDue){
+     setDoc(doc(db,'users',user.uid,'memberships',m.classId),{progress:progressPct,tasks:tasksDue},{merge:true}).catch(console.warn);
+    }
+   });
+  });
+  return()=>unsubs.forEach(u=>u());
+ },[role,user.uid,memberships.map(m=>m.classId).sort().join(',')]);
  return {classes,memberships,pending};
 }
 

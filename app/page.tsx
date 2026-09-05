@@ -1433,6 +1433,12 @@ function StudentDashboard({
     [joinCode, setJoinCode] = useState(''),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState('');
+  const [classStatsMap, setClassStatsMap] = useState<
+    Record<
+      string,
+      { total: number; completed: number; tasksDue: number; progressPct: number }
+    >
+  >({});
   useEffect(
     () =>
       onSnapshot(collection(db, 'users', user.uid, 'memberships'), (s) =>
@@ -1451,6 +1457,95 @@ function StudentDashboard({
       ),
     [user.uid],
   );
+  useEffect(() => {
+    if (!memberships.length) {
+      setClassStatsMap({});
+      return;
+    }
+
+    const unsubs: (() => void)[] = [];
+    memberships.forEach((m) => {
+      const classId = m.classId;
+      const exCol = collection(db, 'classrooms', classId, 'exercises');
+      const unsub = onSnapshot(exCol, async (snapshot) => {
+        const exDocs = snapshot.docs;
+        const total = exDocs.length;
+        if (total === 0) {
+          setClassStatsMap((prev) => ({
+            ...prev,
+            [classId]: { total: 0, completed: 0, tasksDue: 0, progressPct: 0 },
+          }));
+          if (m.progress !== 0 || m.tasks !== 0) {
+            setDoc(
+              doc(db, 'users', user.uid, 'memberships', classId),
+              { progress: 0, tasks: 0 },
+              { merge: true },
+            ).catch(console.warn);
+          }
+          return;
+        }
+
+        const checks = await Promise.all(
+          exDocs.map(async (exDoc) => {
+            try {
+              const subDoc = await getDoc(
+                doc(
+                  db,
+                  'classrooms',
+                  classId,
+                  'exercises',
+                  exDoc.id,
+                  'submissions',
+                  user.uid,
+                ),
+              );
+              if (subDoc.exists()) return true;
+              const qSnap = await getDocs(
+                query(
+                  collection(
+                    db,
+                    'classrooms',
+                    classId,
+                    'exercises',
+                    exDoc.id,
+                    'submissions',
+                  ),
+                  where('studentId', '==', user.uid),
+                  limit(1),
+                ),
+              );
+              return !qSnap.empty;
+            } catch (e) {
+              return false;
+            }
+          }),
+        );
+
+        const completed = checks.filter(Boolean).length;
+        const tasksDue = Math.max(0, total - completed);
+        const progressPct =
+          total > 0 ? Math.round((completed / total) * 100) : 0;
+
+        setClassStatsMap((prev) => ({
+          ...prev,
+          [classId]: { total, completed, tasksDue, progressPct },
+        }));
+
+        if (m.progress !== progressPct || m.tasks !== tasksDue) {
+          setDoc(
+            doc(db, 'users', user.uid, 'memberships', classId),
+            { progress: progressPct, tasks: tasksDue },
+            { merge: true },
+          ).catch(console.warn);
+        }
+      });
+      unsubs.push(unsub);
+    });
+
+    return () => {
+      unsubs.forEach((u) => u());
+    };
+  }, [user.uid, memberships.map((m) => m.classId).sort().join(',')]);
   useEffect(() => {
     const code = new URLSearchParams(location.search).get('join');
     if (code) {
@@ -1478,20 +1573,16 @@ function StudentDashboard({
         id: found.docs[0].id,
         ...found.docs[0].data(),
       } as ClassroomData;
-      const currentStudents = c.students || 0;
-      const maxCap = c.maxStudents || 30;
-      if (currentStudents >= maxCap) {
-        setMessage(
-          `This classroom has reached its maximum student capacity (${currentStudents}/${maxCap}).`,
-        );
+      if ((c.students || 0) >= (c.maxStudents || 30)) {
+        setMessage('This classroom is already full.');
         return;
       }
       if (memberships.some((m) => m.classId === c.id)) {
-        setMessage('You already joined this classroom.');
+        setMessage('You are already enrolled in this classroom.');
         return;
       }
       if (pending.some((p) => p.classId === c.id)) {
-        setMessage('Your request is already waiting for approval.');
+        setMessage('You already requested to join this classroom.');
         return;
       }
       const data = {
@@ -1519,8 +1610,12 @@ function StudentDashboard({
   };
   const total = memberships.length
     ? Math.round(
-        memberships.reduce((n, m) => n + (m.progress || 0), 0) /
-          memberships.length,
+        memberships.reduce((n, m) => {
+          const stats = classStatsMap[m.classId];
+          const pct =
+            stats !== undefined ? stats.progressPct : m.progress || 0;
+          return n + pct;
+        }, 0) / memberships.length,
       )
     : 0;
   return (
@@ -1583,37 +1678,44 @@ function StudentDashboard({
             </Button>
           </div>
           <div id="classrooms" className="student-grid">
-            {memberships.map((m, i) => (
-              <button
-                className={`student-class ${colours[i % 3]}`}
-                key={m.classId}
-                onClick={() => {
-                  onSelectClass({
-                    id: m.classId,
-                    name: m.className,
-                    subject: m.className,
-                    code: m.code,
-                    teacherId: m.teacherId,
-                    teacherName: m.teacherName,
-                    students: 0,
-                    progress: m.progress || 0,
-                  });
-                  onView('classroom');
-                }}
-              >
-                <div className="subject-number">0{i + 1}</div>
-                <div className="student-class-info">
-                  <small>{m.teacherName}</small>
-                  <h3>{m.className}</h3>
-                  <div className="task-line">
-                    <span>{m.tasks || 0} tasks due</span>
-                    <span>{m.progress || 0}% mastered</span>
+            {memberships.map((m, i) => {
+              const stats = classStatsMap[m.classId];
+              const tasksDue =
+                stats !== undefined ? stats.tasksDue : m.tasks || 0;
+              const progressPct =
+                stats !== undefined ? stats.progressPct : m.progress || 0;
+              return (
+                <button
+                  className={`student-class ${colours[i % 3]}`}
+                  key={m.classId}
+                  onClick={() => {
+                    onSelectClass({
+                      id: m.classId,
+                      name: m.className,
+                      subject: m.className,
+                      code: m.code,
+                      teacherId: m.teacherId,
+                      teacherName: m.teacherName,
+                      students: 0,
+                      progress: progressPct,
+                    });
+                    onView('classroom');
+                  }}
+                >
+                  <div className="subject-number">0{i + 1}</div>
+                  <div className="student-class-info">
+                    <small>{m.teacherName}</small>
+                    <h3>{m.className}</h3>
+                    <div className="task-line">
+                      <span>{tasksDue} tasks due</span>
+                      <span>{progressPct}% mastered</span>
+                    </div>
+                    <Progress value={progressPct} />
                   </div>
-                  <Progress value={m.progress || 0} />
-                </div>
-                <ChevronRight />
-              </button>
-            ))}
+                  <ChevronRight />
+                </button>
+              );
+            })}
           </div>
         </>
       )}
@@ -1961,6 +2063,26 @@ function Classroom({
     exercises.length > 0
       ? Math.round((completedExercisesCount / exercises.length) * 100)
       : 0;
+
+  useEffect(() => {
+    if (role !== 'student') return;
+    const tasksDue = Math.max(0, exercises.length - completedExercisesCount);
+    setDoc(
+      doc(db, 'users', user.uid, 'memberships', classroom.id),
+      {
+        progress: studentMasteryPct,
+        tasks: tasksDue,
+      },
+      { merge: true },
+    ).catch(console.warn);
+  }, [
+    role,
+    classroom.id,
+    user.uid,
+    exercises.length,
+    completedExercisesCount,
+    studentMasteryPct,
+  ]);
 
   const [editExTarget, setEditExTarget] = useState<any | null>(null);
   const [editExTitle, setEditExTitle] = useState('');
@@ -3638,14 +3760,63 @@ function StudentExerciseRunner({
       );
 
       try {
-        const pct = Math.min(
-          100,
-          Math.round((score / (totalPoints || 1)) * 100),
+        const exSnap = await getDocs(
+          collection(db, 'classrooms', classroom.id, 'exercises'),
         );
+        const totalEx = exSnap.size;
+        let completedCount = 0;
+        await Promise.all(
+          exSnap.docs.map(async (exDoc) => {
+            if (exDoc.id === exercise.id) {
+              completedCount++;
+              return;
+            }
+            try {
+              const directSub = await getDoc(
+                doc(
+                  db,
+                  'classrooms',
+                  classroom.id,
+                  'exercises',
+                  exDoc.id,
+                  'submissions',
+                  user.uid,
+                ),
+              );
+              if (directSub.exists()) {
+                completedCount++;
+                return;
+              }
+              const qSnap = await getDocs(
+                query(
+                  collection(
+                    db,
+                    'classrooms',
+                    classroom.id,
+                    'exercises',
+                    exDoc.id,
+                    'submissions',
+                  ),
+                  where('studentId', '==', user.uid),
+                  limit(1),
+                ),
+              );
+              if (!qSnap.empty) {
+                completedCount++;
+              }
+            } catch (err) {
+              console.warn('Error checking exercise submission:', err);
+            }
+          }),
+        );
+        const progressPct =
+          totalEx > 0 ? Math.round((completedCount / totalEx) * 100) : 0;
+        const tasksDue = Math.max(0, totalEx - completedCount);
         await setDoc(
           doc(db, 'users', user.uid, 'memberships', classroom.id),
           {
-            progress: pct,
+            progress: progressPct,
+            tasks: tasksDue,
           },
           { merge: true },
         );
