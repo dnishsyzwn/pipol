@@ -27,7 +27,7 @@ import type { QuizQuestion } from './types.js';
 
 setGlobalOptions({ region: 'asia-southeast1', maxInstances: 10, enforceAppCheck: true });
 
-export const testAiConnection = onCall(async (request) => {
+export const testAiConnection = onCall({ secrets: providerSecrets }, async (request) => {
   await requireTeacher(request);
   return { ok: true, response: await testVertexConnection() };
 });

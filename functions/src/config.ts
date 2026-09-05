@@ -1,7 +1,9 @@
-// Cloud Functions uses its Google service identity for Vertex AI authentication.
-// API-key slots remain documented for local/provider experiments but are not
-// injected into production deployments.
-export const providerSecrets: never[] = [];
+import { defineSecret } from 'firebase-functions/params';
+
+// Keep the verified Vertex credential in Secret Manager and bind it only to
+// functions that call the AI provider. It is never sent to the browser.
+export const vertexApiKey = defineSecret('VERTEX_AI_API_KEY');
+export const providerSecrets = [vertexApiKey];
 
 function numberEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);

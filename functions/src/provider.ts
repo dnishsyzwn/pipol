@@ -29,11 +29,12 @@ function vertexUrl(model: string): string {
   return `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(config.vertexProject)}/locations/${encodeURIComponent(config.vertexLocation)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
 }
 
-const googleAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
-
 async function vertexHeaders(): Promise<Record<string, string>> {
+  const apiKey = process.env.VERTEX_AI_API_KEY;
+  if (apiKey) return { 'content-type': 'application/json', 'x-goog-api-key': apiKey };
+  const googleAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
   const accessToken = process.env.VERTEX_AI_ACCESS_TOKEN || (await googleAuth.getAccessToken());
-  if (!accessToken) internal('The Cloud Functions service identity could not obtain a Vertex AI access token.');
+  if (!accessToken) internal('Vertex AI credentials are not configured.');
   return {
     'content-type': 'application/json',
     authorization: `Bearer ${accessToken}`,
