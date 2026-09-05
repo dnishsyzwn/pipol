@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
 import type { User } from 'firebase/auth';
-import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
+import { createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
 import {
   addDoc,
   collection,
@@ -40,6 +40,8 @@ import {
   FileUp,
   FileQuestion,
   GraduationCap,
+  Eye,
+  EyeOff,
   LayoutDashboard,
   LoaderCircle,
   Lock,
@@ -369,19 +371,43 @@ function LoginPage({
  const [name, setName] = useState('');
  const [email, setEmail] = useState('');
  const [password, setPassword] = useState('');
+ const [showPassword, setShowPassword] = useState(false);
  const [modalBusy, setModalBusy] = useState(false);
  const [modalError, setModalError] = useState('');
+ const [resetMessage, setResetMessage] = useState('');
 
  const openModal = (mode: 'login'|'signup', role?: Role) => {
   setAuthMode(mode);
   if (role) setAuthRole(role);
   setModalError('');
+  setResetMessage('');
+  setShowPassword(false);
   setModalOpen(true);
  };
 
  const switchMode = (mode: 'login'|'signup') => {
   setAuthMode(mode);
   setModalError('');
+  setResetMessage('');
+  setShowPassword(false);
+ };
+
+ const handleForgotPassword = async () => {
+  if (!email.trim()) {
+   setModalError('Enter your email address first, then select Forgot password.');
+   return;
+  }
+  setModalBusy(true);
+  setModalError('');
+  setResetMessage('');
+  try {
+   await sendPasswordResetEmail(auth, email.trim());
+   setResetMessage('Password reset email sent. Check your inbox and spam folder.');
+  } catch (err: any) {
+   setModalError(err?.message || 'Could not send the reset email. Please try again.');
+  } finally {
+   setModalBusy(false);
+  }
  };
 
  const handleEmailSubmit = async (e: React.FormEvent) => {
@@ -573,19 +599,25 @@ function LoginPage({
        />
       </label>
 
-      <label className="form-label">
-       Password
-       <Input
-        type="password"
-        placeholder={authMode === 'signup' ? 'At least 6 characters' : 'Enter your password'}
-        value={password}
-        onChange={e => setPassword(e.target.value)}
-        disabled={modalBusy}
-        required
-       />
-      </label>
+      <div className="form-label">
+       <div className="password-label-row"><span>Password</span>{authMode === 'login' && <button type="button" onClick={handleForgotPassword} disabled={modalBusy}>Forgot password?</button>}</div>
+       <div className="password-field">
+        <Input
+         type={showPassword ? 'text' : 'password'}
+         placeholder={authMode === 'signup' ? 'At least 6 characters' : 'Enter your password'}
+         value={password}
+         onChange={e => setPassword(e.target.value)}
+         disabled={modalBusy}
+         required
+        />
+        <button type="button" className="password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} title={showPassword ? 'Hide password' : 'Show password'}>
+         {showPassword ? <EyeOff/> : <Eye/>}
+        </button>
+       </div>
+      </div>
 
       {modalError && <p className="form-error" style={{ marginTop: '2px' }}>{modalError}</p>}
+      {resetMessage && <p className="auth-success">{resetMessage}</p>}
 
       <Button
        type="submit"
@@ -1452,11 +1484,17 @@ function StudentDashboard({
     [user.uid],
   );
   useEffect(() => {
-    const code = new URLSearchParams(location.search).get('join');
-    if (code) {
-      setJoinCode(code.toUpperCase());
-      setJoinOpen(true);
-    }
+    const params = new URLSearchParams(location.search);
+    const code = params.get('join')?.trim().toUpperCase();
+    if (!code) return;
+    params.delete('join');
+    const remainingQuery = params.toString();
+    history.replaceState({}, '', `${location.pathname}${remainingQuery ? `?${remainingQuery}` : ''}${location.hash}`);
+    const inviteKey = `slearn:invite-opened:${code}`;
+    if (sessionStorage.getItem(inviteKey)) return;
+    sessionStorage.setItem(inviteKey, 'true');
+    setJoinCode(code);
+    setJoinOpen(true);
   }, []);
   const requestJoin = async () => {
     setBusy(true);
