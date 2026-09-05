@@ -5,7 +5,10 @@ export const vertexApiKey = defineSecret('VERTEX_AI_API_KEY');
 export const vertexAccessToken = defineSecret('VERTEX_AI_ACCESS_TOKEN');
 export const openRouterApiKey = defineSecret('OPENROUTER_API_KEY');
 export const xplabsApiKey = defineSecret('XPLABS_AI_API_KEY');
-export const providerSecrets = [aiApiKey, vertexApiKey, vertexAccessToken, openRouterApiKey, xplabsApiKey];
+// Only the active Vertex credential is injected into deployed functions.
+// Other provider slots remain documented but cannot expand the attack surface
+// or block deployment while Vertex is the only supported route.
+export const providerSecrets = [vertexApiKey];
 
 function numberEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);
