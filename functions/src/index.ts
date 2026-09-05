@@ -21,6 +21,7 @@ import {
   TransformQuestionSchema,
   UpdateDraftSchema,
   VisualSchema,
+  removeUndefinedValues,
   validateQuestionSet,
 } from './schemas.js';
 import { refundReservation, reserveQuota, settleQuota, type QuotaReservation } from './quota.js';
@@ -216,7 +217,7 @@ export const processQuizGenerationJob = onDocumentCreated(
         questions[index] = { ...question, visual: { mode: 'generate', assetId, purpose: 'AI-generated educational visual', status: 'ready', altText: `Educational visual for: ${question.question}` } };
         generatedImages += 1;
       }
-      await draftRef.set({
+      await draftRef.set(removeUndefinedValues({
         ownerId: job.ownerId,
         classroomId: job.classroomId,
         title: parsed.title || job.title,
@@ -231,7 +232,7 @@ export const processQuizGenerationJob = onDocumentCreated(
         sourceMaterialIds: job.materialIds ?? [],
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
-      });
+      }));
       const reservationData = job.reservation as { periodKey: string; questions: number; images: number };
       reservation = { ref: db.collection('usage').doc(`${job.ownerId}_${reservationData.periodKey}`), periodKey: reservationData.periodKey, questions: reservationData.questions, images: reservationData.images };
       await settleQuota(reservation, questions.length, generatedImages);

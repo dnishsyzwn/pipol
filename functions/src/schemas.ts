@@ -120,6 +120,22 @@ export const TransformQuestionSchema = z.object({
   language: z.string().max(80).optional(),
 });
 
+export function removeUndefinedValues<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => removeUndefinedValues(item)) as T;
+  }
+  if (value && typeof value === 'object') {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return value;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .map(([key, item]) => [key, removeUndefinedValues(item)]),
+    ) as T;
+  }
+  return value;
+}
+
 export function normalizeQuestion(question: QuizQuestion): QuizQuestion {
   const choices = question.choices?.map((choice) => choice.trim()).filter(Boolean);
   const normalized = {
@@ -130,15 +146,16 @@ export function normalizeQuestion(question: QuizQuestion): QuizQuestion {
     hints: question.hints.map((hint) => hint.trim()).filter(Boolean),
     ...(choices?.length ? { choices } : {}),
   };
+  const firestoreSafe = removeUndefinedValues(normalized) as QuizQuestion;
   if (
-    normalized.type === 'multiple_choice' &&
-    (!normalized.choices ||
-      normalized.choices.length < 2 ||
-      !normalized.choices.includes(normalized.correctAnswer))
+    firestoreSafe.type === 'multiple_choice' &&
+    (!firestoreSafe.choices ||
+      firestoreSafe.choices.length < 2 ||
+      !firestoreSafe.choices.includes(firestoreSafe.correctAnswer))
   ) {
-    return { ...normalized, needsReview: true, confidence: 'low' };
+    return { ...firestoreSafe, needsReview: true, confidence: 'low' };
   }
-  return normalized;
+  return firestoreSafe;
 }
 
 export function validateQuestionSet(questions: QuizQuestion[]): QuizQuestion[] {
