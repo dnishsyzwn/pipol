@@ -15,6 +15,27 @@ const firebaseConfig = {
 
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
+const appCheckState = globalThis as typeof globalThis & {
+  __slearnAppCheckInitialization?: Promise<void>;
+};
+
+export function initializeSlearnAppCheck() {
+  if (typeof window === 'undefined') return Promise.resolve();
+  if (!appCheckState.__slearnAppCheckInitialization) {
+    appCheckState.__slearnAppCheckInitialization = (async () => {
+      const { initializeAppCheck, ReCaptchaEnterpriseProvider } =
+        await import('firebase/app-check');
+      initializeAppCheck(app, {
+        provider: new ReCaptchaEnterpriseProvider(
+          '6LflkaotAAAAAJFaERXPuNYUxITDUce8EhmYgqri',
+        ),
+        isTokenAutoRefreshEnabled: true,
+      });
+    })();
+  }
+  return appCheckState.__slearnAppCheckInitialization;
+}
+
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const functions = getFunctions(app, 'asia-southeast1');

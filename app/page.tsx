@@ -71,10 +71,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { auth, db, functions, googleProvider, storage } from '@/lib/firebase';
+import { auth, db, functions, googleProvider, initializeSlearnAppCheck, storage } from '@/lib/firebase';
 import { ClassroomsDetail, ProgressDetail } from './detail-pages';
 
 type Role = 'teacher' | 'student';
+type Difficulty = 'easy' | 'medium' | 'hard';
 type View = 'dashboard' | 'classes' | 'progress' | 'classroom' | 'quiz' | 'exercise';
 type ClassroomData = {
   id: string;
@@ -113,6 +114,7 @@ type QuestionItem = {
   answer: string;
   points: number;
   enhanced: boolean;
+  difficulty?: Difficulty;
   loading?: boolean;
 };
 type QuestionResult = {
@@ -123,6 +125,7 @@ type QuestionResult = {
   isCorrect: boolean;
   pointsEarned: number;
   pointsPossible: number;
+  difficulty: Difficulty;
 };
 type SubmissionData = {
   id: string;
@@ -151,6 +154,13 @@ type ExerciseAnalytics = {
     wrongCount: number;
     totalAnswers: number;
     accuracyRate: number;
+    difficulty: Difficulty;
+  }[];
+  difficultyBreakdown: {
+    difficulty: Difficulty;
+    correctCount: number;
+    totalAnswers: number;
+    accuracyRate: number;
   }[];
   submissions: SubmissionData[];
 };
@@ -163,6 +173,28 @@ type AuthParams = {
   name?: string;
 };
 const MAX_TEACHER_CLASSES = 3;
+const difficultyOrder: Difficulty[] = ['easy', 'medium', 'hard'];
+const difficultyColour = (difficulty: Difficulty) =>
+  difficulty === 'easy' ? '#edf7df' : difficulty === 'hard' ? '#ffe1dc' : '#fff0d4';
+
+function summarizeDifficulty(results: QuestionResult[]) {
+  return difficultyOrder.map((difficulty) => {
+    const matching = results.filter((result) => result.difficulty === difficulty);
+    const correctCount = matching.filter((result) => result.isCorrect).length;
+    return {
+      difficulty,
+      correctCount,
+      totalAnswers: matching.length,
+      accuracyRate: matching.length ? Math.round((correctCount / matching.length) * 100) : 0,
+    };
+  });
+}
+
+function capabilityFromResults(results: QuestionResult[]) {
+  const summary = summarizeDifficulty(results);
+  const mastered = [...summary].reverse().find((item) => item.totalAnswers > 0 && item.accuracyRate >= 70);
+  return mastered ? `${mastered.difficulty[0]?.toUpperCase()}${mastered.difficulty.slice(1)} level` : 'Building foundations';
+}
 const colours = ['lime', 'blue', 'violet'];
 const initials = (name?: string | null) =>
   (name || 'Learner')
@@ -243,13 +275,17 @@ function computeSubmissionStats(
     Array.isArray(sub.questionResults) &&
     sub.questionResults.length > 0
   ) {
-    const c = sub.questionResults.filter(
+    const normalizedResults = sub.questionResults.map((result: QuestionResult, index: number) => ({
+      ...result,
+      difficulty: result.difficulty || qList[result.questionIdx ?? index]?.difficulty || 'medium',
+    }));
+    const c = normalizedResults.filter(
       (r: QuestionResult) => r.isCorrect,
     ).length;
-    const w = sub.questionResults.filter(
+    const w = normalizedResults.filter(
       (r: QuestionResult) => !r.isCorrect,
     ).length;
-    return { correct: c, wrong: w, questionResults: sub.questionResults };
+    return { correct: c, wrong: w, questionResults: normalizedResults };
   }
 
   // 2. If submission has answers map, compare each with question answers
@@ -292,6 +328,7 @@ function computeSubmissionStats(
             ? Math.max(1, Math.round(pts * 0.5))
             : 0,
         pointsPossible: pts,
+        difficulty: q.difficulty || 'medium',
       };
     });
 
@@ -2056,8 +2093,14 @@ function Classroom({
               cCount + wCount > 0
                 ? Math.round((cCount / (cCount + wCount)) * 100)
                 : 0,
+            difficulty: (q.difficulty || 'medium') as Difficulty,
           };
         });
+
+        const allQuestionResults = subs.flatMap((submission) =>
+          computeSubmissionStats(submission, ex).questionResults,
+        );
+        const difficultyBreakdown = summarizeDifficulty(allQuestionResults);
 
         subs.forEach((s) => {
           const stats = computeSubmissionStats(s, ex);
@@ -2077,6 +2120,7 @@ function Classroom({
             totalWrong,
             accuracyRate,
             questionBreakdown: qStats,
+            difficultyBreakdown,
             submissions: subs,
           },
         }));
@@ -2911,6 +2955,7 @@ function Classroom({
                 totalWrong: 0,
                 accuracyRate: 0,
                 questionBreakdown: [],
+                difficultyBreakdown: [],
                 submissions: [],
               };
               return (
@@ -2951,6 +2996,18 @@ function Classroom({
                     </div>
                   </div>
                   <div style={{ marginBottom: '1.5rem' }}>
+                    <h3 style={{ fontSize: '1.05rem', fontWeight: 600, marginBottom: '.75rem' }}>Performance by Difficulty</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: '.7rem' }}>
+                      {stats.difficultyBreakdown.map((item) => (
+                        <div key={item.difficulty} style={{ background: difficultyColour(item.difficulty), borderRadius: 12, padding: '.8rem' }}>
+                          <b style={{ textTransform: 'capitalize' }}>{item.difficulty}</b>
+                          <div style={{ fontSize: '1.35rem', fontWeight: 800 }}>{item.totalAnswers ? `${item.accuracyRate}%` : '—'}</div>
+                          <small>{item.correctCount}/{item.totalAnswers} correct</small>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ marginBottom: '1.5rem' }}>
                     <h3
                       style={{
                         fontSize: '1.05rem',
@@ -2981,7 +3038,8 @@ function Classroom({
                                   color: '#787268',
                                 }}
                               >
-                                Question 0{q.questionIdx + 1}
+                                Question 0{q.questionIdx + 1}{' '}
+                                <span style={{ background: difficultyColour(q.difficulty), borderRadius: 999, padding: '2px 6px', marginLeft: 5 }}>{q.difficulty}</span>
                               </span>
                               <p
                                 style={{
@@ -3092,6 +3150,7 @@ function Classroom({
                             sub,
                             activeAnalyticsEx,
                           );
+                          const capability = capabilityFromResults(subStats.questionResults);
                           const totalPts =
                             sub.totalPoints ||
                             activeAnalyticsEx.questions?.reduce(
@@ -3165,6 +3224,9 @@ function Classroom({
                                     }}
                                   >
                                     {sub.studentEmail}
+                                  </small>
+                                  <small style={{ color: '#315b42', display: 'block', fontSize: '.7rem', fontWeight: 700 }}>
+                                    Capability: {capability}
                                   </small>
                                 </div>
                               </div>
@@ -3769,6 +3831,7 @@ function StudentExerciseRunner({
           isCorrect,
           pointsEarned: earned,
           pointsPossible: pts,
+          difficulty: q.difficulty || 'medium',
         });
       });
 
@@ -3890,6 +3953,9 @@ function StudentExerciseRunner({
   const progressPct = Math.round(
     ((currentIdx + 1) / (rawQuestions.length || 1)) * 100,
   );
+  const studentResults = computeSubmissionStats({ answers }, exercise).questionResults;
+  const studentDifficultyBreakdown = summarizeDifficulty(studentResults);
+  const studentCapability = capabilityFromResults(studentResults);
 
   return (
     <AppShell
@@ -4181,6 +4247,19 @@ function StudentExerciseRunner({
             </div>
           </div>
 
+          <div style={{ margin: '-1rem 0 2rem' }}>
+            <p style={{ margin: '0 0 .7rem', fontWeight: 700 }}>Your capability: {studentCapability}</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: '.7rem' }}>
+              {studentDifficultyBreakdown.map((item) => (
+                <div key={item.difficulty} style={{ background: difficultyColour(item.difficulty), borderRadius: 12, padding: '.75rem', textAlign: 'left' }}>
+                  <b style={{ textTransform: 'capitalize' }}>{item.difficulty}</b>
+                  <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>{item.totalAnswers ? `${item.accuracyRate}%` : '—'}</div>
+                  <small>{item.accuracyRate >= 70 ? 'Strength' : item.totalAnswers ? 'Needs practice' : 'Not assessed'}</small>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div
             style={{
               marginTop: '1.5rem',
@@ -4242,6 +4321,7 @@ function StudentExerciseRunner({
                         }}
                       >
                         Question 0{i + 1}
+                        <span style={{ background: difficultyColour(q.difficulty || 'medium'), borderRadius: 999, padding: '2px 6px', marginLeft: 6 }}>{q.difficulty || 'medium'}</span>
                       </span>
                       <span
                         style={{
@@ -4368,6 +4448,20 @@ function StudentExerciseRunner({
                   Solve the problem
                 </h2>
               </div>
+              <span
+                style={{
+                  background: difficultyColour(currentQ.difficulty || 'medium'),
+                  padding: '0.3rem 0.8rem',
+                  borderRadius: '99px',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  textTransform: 'capitalize',
+                  marginLeft: 'auto',
+                  marginRight: '.5rem',
+                }}
+              >
+                {currentQ.difficulty || 'medium'}
+              </span>
               <span
                 style={{
                   background: '#f1ece5',
@@ -4531,6 +4625,7 @@ function StudentExerciseRunner({
                   >
                     Question 0{i + 1}
                   </span>
+                  <small style={{ background: difficultyColour(q.difficulty || 'medium'), borderRadius: 999, padding: '2px 6px', textTransform: 'capitalize' }}>{q.difficulty || 'medium'}</small>
                   {answers[i]?.trim() ? (
                     <Check
                       style={{
@@ -4585,6 +4680,7 @@ function QuizBuilder({
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [questionCount, setQuestionCount] = useState(5);
   const [imageCount, setImageCount] = useState(0);
+  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | 'mixed'>('medium');
   const [generating, setGenerating] = useState(false);
   const [generationStatus, setGenerationStatus] = useState('');
   const [quota, setQuota] = useState({ questionsUsed: 0, imagesUsed: 0 });
@@ -4674,7 +4770,7 @@ function QuizBuilder({
         imageMode: 'none',
         subject: classroom.subject,
         language: 'English',
-        difficulty: 'medium',
+        difficulty,
         questionTypes: ['short_answer'],
         learningObjectives: [],
       });
@@ -4687,9 +4783,9 @@ function QuizBuilder({
         }, reject);
       });
       const draft = await getDoc(doc(db, 'quizDrafts', String(job.draftId)));
-      const generated = (draft.data()?.questions ?? [])[0] as { question?: string; correctAnswer?: string } | undefined;
+      const generated = (draft.data()?.questions ?? [])[0] as { question?: string; correctAnswer?: string; difficulty?: 'easy' | 'medium' | 'hard' } | undefined;
       if (!generated?.question) throw new Error('No question was generated. Please try again.');
-      setQuestions((current) => current.map((question, index) => index === quickGenerateIndex ? { ...question, question: generated.question || '', answer: generated.correctAnswer || '', enhanced: true } : question));
+      setQuestions((current) => current.map((question, index) => index === quickGenerateIndex ? { ...question, question: generated.question || '', answer: generated.correctAnswer || '', difficulty: generated.difficulty, enhanced: true } : question));
       setQuickGenerateIndex(null);
       setQuickPrompt('');
     } catch (error) {
@@ -4727,7 +4823,7 @@ function QuizBuilder({
         imageMode: imageCount > 0 ? 'generate' : 'none',
         subject: classroom.subject,
         language: 'English',
-        difficulty: 'medium',
+        difficulty,
         questionTypes: ['multiple_choice', 'short_answer'],
         learningObjectives: [],
       });
@@ -4740,10 +4836,11 @@ function QuizBuilder({
         }, reject);
       });
       const draft = await getDoc(doc(db, 'quizDrafts', String(job.draftId)));
-      const generated = (draft.data()?.questions ?? []) as Array<{ id?: string; question: string; correctAnswer: string }>;
-      setQuestions(generated.map((question, index) => ({ id: question.id || `ai-${index}`, question: question.question, answer: question.correctAnswer, points: 2, enhanced: true })));
+      const generated = (draft.data()?.questions ?? []) as Array<{ id?: string; question: string; correctAnswer: string; difficulty?: 'easy' | 'medium' | 'hard' }>;
+      setQuestions(generated.map((question, index) => ({ id: question.id || `ai-${index}`, question: question.question, answer: question.correctAnswer, points: 2, enhanced: true, difficulty: question.difficulty })));
       if (!title.trim() && draft.data()?.title) setTitle(String(draft.data()?.title));
-      setGenerationStatus(`Draft ready: ${generated.length} questions${imageCount ? ` and ${imageCount} images` : ''}. Review before publishing.`);
+      const inferredLevel = String(draft.data()?.level || 'General education');
+      setGenerationStatus(`Draft ready for ${inferredLevel}: ${generated.length} questions${imageCount ? ` and ${imageCount} images` : ''}. Review before publishing.`);
     } catch (error) {
       setGenerationStatus(error instanceof Error ? error.message : 'AI generation failed.');
     } finally {
@@ -4768,6 +4865,7 @@ function QuizBuilder({
           answer: q.answer.trim(),
           points: q.points,
           enhanced: q.enhanced,
+          difficulty: q.difficulty || 'medium',
         })),
         questionCount: questions.length,
         enhanced: hasEnhancedAny,
@@ -5009,6 +5107,7 @@ function QuizBuilder({
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: '1rem', marginTop: '1rem', alignItems: 'end' }}>
           <label className="form-label">Questions<Input type="number" min={1} max={Math.min(15, Math.max(1, 15 - quota.questionsUsed))} value={questionCount} onChange={(event) => setQuestionCount(Math.max(1, Math.min(15, Number(event.target.value) || 1)))}/></label>
+          <label className="form-label">Difficulty<select value={difficulty} onChange={(event) => setDifficulty(event.target.value as 'easy' | 'medium' | 'hard' | 'mixed')} style={{ width: '100%', height: 40, border: '1px solid #dce5dc', borderRadius: 10, padding: '0 .75rem', background: '#fff' }}><option value="easy">Easy</option><option value="medium">Moderate</option><option value="hard">Hard</option><option value="mixed">Randomized mix</option></select></label>
           <label className="form-label">AI-generated images<Input type="number" min={0} max={Math.min(5, Math.max(0, 5 - quota.imagesUsed))} value={imageCount} onChange={(event) => setImageCount(Math.max(0, Math.min(5, Number(event.target.value) || 0)))}/></label>
           <Button type="button" onClick={generateWithAi} disabled={generating || questionCount > Math.max(0, 15 - quota.questionsUsed) || imageCount > Math.max(0, 5 - quota.imagesUsed)} className="primary-action">{generating ? <LoaderCircle/> : <WandSparkles/>}{generating ? 'Generating draft…' : 'Generate editable draft'}</Button>
         </div>
@@ -5031,6 +5130,7 @@ function QuizBuilder({
             >
               <div className="question-count">
                 <span>Question 0{idx + 1}</span>
+                <span style={{ marginLeft: 'auto', marginRight: questions.length > 1 ? '.5rem' : 0, padding: '.25rem .55rem', borderRadius: 999, background: difficultyColour(q.difficulty || 'medium'), fontSize: '.7rem', textTransform: 'capitalize' }}>{q.difficulty || 'medium'}</span>
                 {questions.length > 1 && (
                   <button
                     type="button"
@@ -5213,6 +5313,9 @@ export default function Home() {
     [selectedExercise, setSelectedExercise] = useState<any | null>(null),
     [detailCount, setDetailCount] = useState(0),
     [, setProfileVersion] = useState(0);
+  useEffect(() => {
+    void initializeSlearnAppCheck();
+  }, []);
   useEffect(
     () =>
       onAuthStateChanged(auth, async (current) => {

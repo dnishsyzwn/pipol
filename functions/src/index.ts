@@ -134,7 +134,7 @@ export const createQuizGenerationJob = onCall(
   async (request) => {
     const auth = await requireTeacher(request);
     const input = data(request, CreateQuizJobSchema);
-    assertGenerationInput(input.prompt, input.subject, input.level);
+    assertGenerationInput(input.prompt, input.subject);
     await requireClassroomOwner(input.classroomId, auth.uid);
     if (!input.prompt.trim() && input.materialIds.length === 0) invalid('Add a prompt or learning material.');
     const requestedImages = input.imageMode === 'generate' ? input.imageCount : 0;
@@ -208,7 +208,7 @@ export const processQuizGenerationJob = onDocumentCreated(
       for (let index = 0; index < requestedImages; index += 1) {
         const question = questions[index];
         if (!question) continue;
-        const image = await generateImage(`Educational visual for this quiz question: ${question.question}`, String(settings.level ?? 'general education'));
+        const image = await generateImage(`Educational visual for this quiz question: ${question.question}`, parsed.inferredLevel);
         const assetId = db.collection('quizAssets').doc().id;
         const storagePath = `users/${job.ownerId}/quiz-assets/${draftRef.id}/${assetId}.png`;
         await bucket.file(storagePath).save(image.bytes, { resumable: false, metadata: { contentType: image.contentType, metadata: { ownerId: String(job.ownerId), draftId: draftRef.id } } });
@@ -223,7 +223,7 @@ export const processQuizGenerationJob = onDocumentCreated(
         instructions: parsed.instructions,
         language: settings.language ?? 'English',
         subject: settings.subject,
-        level: settings.level,
+        level: parsed.inferredLevel,
         questions,
         learningObjectives: parsed.learningObjectives,
         status: 'ready_for_review',
@@ -413,7 +413,11 @@ export const recordQuizAttempt = onCall(async (request) => {
   const classroomId = String(quiz.get('classroomId'));
   await requireClassroomMember(classroomId, auth.uid);
   const questions = (quiz.get('questions') as QuizQuestion[] | undefined) ?? [];
-  const results = questions.map((question) => ({ questionId: question.id, correct: input.answers[question.id]?.trim().toLowerCase() === question.correctAnswer.trim().toLowerCase() }));
+  const results = questions.map((question) => ({
+    questionId: question.id,
+    difficulty: question.difficulty,
+    correct: input.answers[question.id]?.trim().toLowerCase() === question.correctAnswer.trim().toLowerCase(),
+  }));
   const score = results.length ? Math.round((results.filter((result) => result.correct).length / results.length) * 100) : 0;
   const attemptRef = db.collection('quizAttempts').doc();
   await attemptRef.set({ quizId: input.quizId, classroomId, studentId: auth.uid, answers: input.answers, results, score, completedAt: FieldValue.serverTimestamp() });

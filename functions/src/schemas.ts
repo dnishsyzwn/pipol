@@ -10,6 +10,7 @@ export const QuestionTypeSchema = z.enum([
 ]);
 
 export const DifficultySchema = z.enum(['easy', 'medium', 'hard']);
+export const GenerationDifficultySchema = z.enum(['easy', 'medium', 'hard', 'mixed']);
 
 export const ImageModeSchema = z.enum(['none', 'upload', 'generate']);
 
@@ -48,6 +49,7 @@ export const QuizQuestionSchema = z.object({
 export const GeneratedQuizSchema = z.object({
   title: z.string().min(1).max(300),
   instructions: z.string().max(2000).optional(),
+  inferredLevel: z.string().min(1).max(100),
   learningObjectives: z.array(z.string().min(1).max(500)).max(10),
   questions: z.array(QuizQuestionSchema).min(1).max(30),
 });
@@ -68,7 +70,7 @@ export const CreateQuizJobSchema = z.object({
   subject: z.string().max(200).optional(),
   level: z.string().max(100).optional(),
   language: z.string().max(80).default('English'),
-  difficulty: DifficultySchema.default('medium'),
+  difficulty: GenerationDifficultySchema.default('medium'),
   questionTypes: z.array(QuestionTypeSchema).min(1).max(5).default(['multiple_choice', 'short_answer']),
   learningObjectives: z.array(z.string().max(500)).max(10).default([]),
   imageMode: ImageModeSchema.default('none'),
