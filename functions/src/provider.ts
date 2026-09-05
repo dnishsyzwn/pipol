@@ -1,4 +1,4 @@
-import { config, getProviderSecret, vertexAccessToken } from './config.js';
+import { config, getProviderSecret } from './config.js';
 import { sanitizeSourceText } from './content.js';
 import { internal, unavailable } from './errors.js';
 import { GeneratedQuizSchema } from './schemas.js';
@@ -29,7 +29,7 @@ function vertexUrl(model: string): string {
 }
 
 function vertexHeaders(): Record<string, string> {
-  const accessToken = vertexAccessToken.value() || process.env.VERTEX_AI_ACCESS_TOKEN;
+  const accessToken = process.env.VERTEX_AI_ACCESS_TOKEN;
   const key = getProviderSecret('vertex');
   return {
     'content-type': 'application/json',
