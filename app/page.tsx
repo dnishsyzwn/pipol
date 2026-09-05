@@ -267,40 +267,42 @@ function quotaDate(value: unknown): Date | null {
   return date && !Number.isNaN(date.getTime()) ? date : null;
 }
 
-function useAiQuota(uid: string, enabled = true): AiQuota {
-  const [quota, setQuota] = useState<AiQuota>({ questionsUsed: 0, imagesUsed: 0, nextResetAt: null });
+function nextAccountWeeklyReset(creationTime?: string): Date | null {
+  const anchor = creationTime ? new Date(creationTime).getTime() : Number.NaN;
+  if (!Number.isFinite(anchor)) return null;
+  const week = 7 * 24 * 60 * 60 * 1000;
+  const cycle = Math.floor(Math.max(0, Date.now() - anchor) / week);
+  return new Date(anchor + (cycle + 1) * week);
+}
+
+function useAiQuota(user: User, enabled = true): AiQuota {
+  const [quota, setQuota] = useState<AiQuota>({ questionsUsed: 0, imagesUsed: 0, nextResetAt: nextAccountWeeklyReset(user.metadata.creationTime) });
   useEffect(() => {
     if (!enabled) return;
     let latest: Record<string, unknown> = {};
     const refresh = () => {
       const now = Date.now();
-      const credits = Array.isArray(latest.activeCredits) ? latest.activeCredits : [];
-      const active = credits.filter((credit) => {
-        const expiry = quotaDate((credit as { expiresAt?: unknown }).expiresAt);
-        return expiry && expiry.getTime() > now;
-      }) as Array<{ questions?: unknown; images?: unknown; expiresAt?: unknown }>;
-      const nextResetAt = active
-        .map((credit) => quotaDate(credit.expiresAt))
-        .filter((date): date is Date => Boolean(date))
-        .sort((left, right) => left.getTime() - right.getTime())[0] ?? null;
+      const nextResetAt = nextAccountWeeklyReset(user.metadata.creationTime);
+      const storedReset = quotaDate(latest.nextResetAt);
+      const currentCycle = latest.quotaType === 'account_weekly_reset' && storedReset && storedReset.getTime() > now;
       setQuota({
-        questionsUsed: active.reduce((sum, credit) => sum + Number(credit.questions ?? 0), 0),
-        imagesUsed: active.reduce((sum, credit) => sum + Number(credit.images ?? 0), 0),
+        questionsUsed: currentCycle ? Number(latest.questionsUsed ?? 0) : 0,
+        imagesUsed: currentCycle ? Number(latest.imagesUsed ?? 0) : 0,
         nextResetAt,
       });
     };
-    const unsubscribe = onSnapshot(doc(db, 'usage', uid), (snapshot) => {
+    const unsubscribe = onSnapshot(doc(db, 'usage', user.uid), (snapshot) => {
       latest = snapshot.data() ?? {};
       refresh();
     });
     const timer = window.setInterval(refresh, 30_000);
     return () => { unsubscribe(); window.clearInterval(timer); };
-  }, [enabled, uid]);
+  }, [enabled, user.metadata.creationTime, user.uid]);
   return quota;
 }
 
 function quotaCountdown(date: Date | null) {
-  if (!date) return 'No credits currently waiting to return';
+  if (!date) return 'Reset schedule unavailable';
   const remaining = Math.max(0, date.getTime() - Date.now());
   const days = Math.floor(remaining / 86_400_000);
   const hours = Math.floor((remaining % 86_400_000) / 3_600_000);
@@ -819,7 +821,7 @@ function AppShell({
   const [profilePreview, setProfilePreview] = useState(user.photoURL || '');
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState('');
-  const profileQuota = useAiQuota(user.uid, role === 'teacher');
+  const profileQuota = useAiQuota(user, role === 'teacher');
   useEffect(() => { if (!profileFile) { setProfilePreview(profilePhoto); return; } const url = URL.createObjectURL(profileFile); setProfilePreview(url); return () => URL.revokeObjectURL(url); }, [profileFile, profilePhoto]);
   const go = (target: NavTarget) => {
     if (onNavigate) {
@@ -877,7 +879,7 @@ function AppShell({
         <button type="button" className="mobile-profile" onClick={openProfile} aria-label="Edit profile">{avatar()}</button>
       </div>
       <section className="main-stage">{children}</section>
-      <Dialog open={profileOpen} onOpenChange={setProfileOpen}><DialogContent className="modal-card profile-modal"><DialogHeader><DialogTitle>Profile dashboard</DialogTitle><DialogDescription>Manage your profile and view your SLearn AI allowance.</DialogDescription></DialogHeader><div className="profile-editor"><div className="profile-photo-preview">{profilePreview ? <img src={profilePreview} alt="Profile preview" /> : <span>{initials(profileName)}</span>}<label title="Choose profile picture"><Camera/><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0])}/></label></div><label className="form-label">Display name<Input value={profileName} maxLength={60} onChange={(event) => setProfileName(event.target.value)} placeholder="Your name"/></label><p className="profile-help">JPG, PNG or WebP · maximum 5 MB</p>{role === 'teacher' && <div style={{ background: '#f8faf7', border: '1px solid #dfe8df', borderRadius: 16, padding: '1rem', width: '100%' }}><span className="kicker">Rolling 7-day AI quota</span><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.7rem', marginTop: '.6rem' }}><div><b>{Math.max(0, 15 - profileQuota.questionsUsed)}/15</b><small style={{ display: 'block' }}>questions available</small></div><div><b>{Math.max(0, 5 - profileQuota.imagesUsed)}/5</b><small style={{ display: 'block' }}>images available</small></div></div><div style={{ marginTop: '.8rem', paddingTop: '.8rem', borderTop: '1px solid #dfe8df' }}><b>Next credits return in {quotaCountdown(profileQuota.nextResetAt)}</b><small style={{ display: 'block', marginTop: '.2rem' }}>{profileQuota.nextResetAt ? profileQuota.nextResetAt.toLocaleString() : 'Each credit returns exactly seven days after use.'}</small></div></div>}{profileError && <p className="auth-error">{profileError}</p>}</div><DialogFooter><Button variant="outline" onClick={() => setProfileOpen(false)} disabled={profileSaving}>Close</Button><Button className="primary-action" onClick={saveProfile} disabled={profileSaving}>{profileSaving ? <><LoaderCircle/> Saving…</> : <><Check/> Save profile</>}</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={profileOpen} onOpenChange={setProfileOpen}><DialogContent className="modal-card profile-modal"><DialogHeader><DialogTitle>Profile dashboard</DialogTitle><DialogDescription>Manage your profile and view your SLearn AI allowance.</DialogDescription></DialogHeader><div className="profile-editor"><div className="profile-photo-preview">{profilePreview ? <img src={profilePreview} alt="Profile preview" /> : <span>{initials(profileName)}</span>}<label title="Choose profile picture"><Camera/><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0])}/></label></div><label className="form-label">Display name<Input value={profileName} maxLength={60} onChange={(event) => setProfileName(event.target.value)} placeholder="Your name"/></label><p className="profile-help">JPG, PNG or WebP · maximum 5 MB</p>{role === 'teacher' && <div style={{ background: '#f8faf7', border: '1px solid #dfe8df', borderRadius: 16, padding: '1rem', width: '100%' }}><span className="kicker">Personal weekly AI quota</span><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.7rem', marginTop: '.6rem' }}><div><b>{Math.max(0, 15 - profileQuota.questionsUsed)}/15</b><small style={{ display: 'block' }}>questions available</small></div><div><b>{Math.max(0, 5 - profileQuota.imagesUsed)}/5</b><small style={{ display: 'block' }}>images available</small></div></div><div style={{ marginTop: '.8rem', paddingTop: '.8rem', borderTop: '1px solid #dfe8df' }}><b>Full quota resets in {quotaCountdown(profileQuota.nextResetAt)}</b><small style={{ display: 'block', marginTop: '.2rem' }}>{profileQuota.nextResetAt ? profileQuota.nextResetAt.toLocaleString() : 'The reset schedule is based on when this account was created.'}</small><small style={{ display: 'block', marginTop: '.25rem' }}>Unused credits do not carry over to the next cycle.</small></div></div>}{profileError && <p className="auth-error">{profileError}</p>}</div><DialogFooter><Button variant="outline" onClick={() => setProfileOpen(false)} disabled={profileSaving}>Close</Button><Button className="primary-action" onClick={saveProfile} disabled={profileSaving}>{profileSaving ? <><LoaderCircle/> Saving…</> : <><Check/> Save profile</>}</Button></DialogFooter></DialogContent></Dialog>
     </div>
   );
 }
@@ -4885,7 +4887,7 @@ function QuizBuilder({
   const [imageCount, setImageCount] = useState(0);
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | 'mixed'>('medium');
   const [generating, setGenerating] = useState(false);
-  const quota = useAiQuota(user.uid);
+  const quota = useAiQuota(user);
   const [quickGenerateIndex, setQuickGenerateIndex] = useState<number | null>(null);
   const [quickPrompt, setQuickPrompt] = useState('');
   const [quickGenerating, setQuickGenerating] = useState(false);
@@ -4948,7 +4950,7 @@ function QuizBuilder({
   const generateSingleQuestion = async () => {
     if (quickGenerateIndex === null) return;
     if (quota.questionsUsed >= 15) {
-      setQuickGenerateError('Your rolling 7-day AI question quota has been used. Check your profile dashboard for the next credit return time.');
+      setQuickGenerateError('Your weekly AI question quota has been used. Check your profile dashboard for the next full reset time.');
       return;
     }
     setQuickGenerating(true);
