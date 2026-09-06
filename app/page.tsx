@@ -2023,9 +2023,7 @@ function TeacherDashboard({
                 <span className="avatar">{initials(r.studentName)}</span>
                 <div>
                   <b>{r.studentName}</b>
-                  <small>
-                    {r.className} · {r.studentEmail}
-                  </small>
+                  <small>{r.className}</small>
                 </div>
                 <button
                   className="decline"
@@ -3302,9 +3300,7 @@ function Classroom({
     if (!studentSearch.trim()) return members;
     const q = studentSearch.trim().toLowerCase();
     return members.filter(
-      (m) =>
-        m.name?.toLowerCase().includes(q) ||
-        m.email?.toLowerCase().includes(q),
+      (m) => m.name?.toLowerCase().includes(q),
     );
   }, [members, studentSearch]);
 
@@ -4388,7 +4384,7 @@ function Classroom({
                 />
                 <Input
                   type="text"
-                  placeholder="Search students by name or email..."
+                  placeholder="Search students by name..."
                   value={studentSearch}
                   onChange={(e) => setStudentSearch(e.target.value)}
                   style={{
@@ -4494,7 +4490,7 @@ function Classroom({
                     marginBottom: '1rem',
                   }}
                 >
-                  Try searching by a different name or email.
+                  Try searching by a different name.
                 </small>
                 <Button
                   variant="outline"
@@ -4602,18 +4598,6 @@ function Classroom({
                               </span>
                             )}
                           </div>
-                          {member.email && (
-                            <small
-                              style={{
-                                color: '#666',
-                                fontSize: '0.78rem',
-                                display: 'block',
-                                marginTop: '1px',
-                              }}
-                            >
-                              {member.email}
-                            </small>
-                          )}
                           <small
                             style={{
                               color: '#888',
@@ -5235,15 +5219,6 @@ function Classroom({
                                       </span>
                                     )}
                                   </div>
-                                  <small
-                                    style={{
-                                      color: '#777',
-                                      display: 'block',
-                                      fontSize: '0.72rem',
-                                    }}
-                                  >
-                                    {sub.studentEmail}
-                                  </small>
                                   <small style={{ color: '#315b42', display: 'block', fontSize: '.7rem', fontWeight: 700 }}>
                                     Capability: {capability}
                                   </small>
@@ -7237,17 +7212,6 @@ function StudentExerciseRunner({
                                   <strong style={{ fontSize: '0.85rem' }}>
                                     {sub.studentName || 'Student'}
                                   </strong>
-                                  {sub.studentEmail && (
-                                    <span
-                                      style={{
-                                        fontSize: '0.72rem',
-                                        color: '#888',
-                                        marginLeft: '6px',
-                                      }}
-                                    >
-                                      ({sub.studentEmail})
-                                    </span>
-                                  )}
                                 </div>
                               </div>
 
