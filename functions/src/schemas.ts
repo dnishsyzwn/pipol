@@ -60,10 +60,10 @@ export const QuizQuestionSchema = z.object({
 });
 
 export const GeneratedQuizSchema = z.object({
-  title: z.string().min(1).max(300),
+  title: z.string().min(1).max(300).nullish().transform((value) => value || 'AI-generated learning check'),
   instructions: z.string().max(2000).nullish().transform((value) => value ?? undefined),
-  inferredLevel: z.string().min(1).max(100),
-  learningObjectives: z.array(z.string().min(1).max(500)).max(10),
+  inferredLevel: z.string().min(1).max(100).nullish().transform((value) => value || 'General education'),
+  learningObjectives: z.array(z.string().min(1).max(500)).max(10).nullish().transform((value) => value ?? []),
   questions: z.array(QuizQuestionSchema).min(1).max(30),
 });
 
