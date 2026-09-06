@@ -1,0 +1,13 @@
+# Personalized exercises
+
+Teachers enable Personalized exercise in the existing builder and choose a previous exercise in that classroom (the newest is selected initially). The server uses active members' fully marked question results, computes earned / possible points, and uses the strict `< 60%` boundary. Missing, invalid or pending manual results are excluded and counted in the generation preview.
+
+Students with at least 60% share a single new AI set. Each student below 60% receives a separate set. The server ranks topic accuracy by earned / possible points, takes up to three weakest topics, then generates `round(questionCount * 0.7)` focused questions and the remaining reinforcement questions in separate calls. Exact 70/30 is possible for ten questions; other sizes round to whole questions. Both MCQ and typed-answer sets are available.
+
+Generation uses the existing Vertex provider and account-wide quota reservation. Cost is question count multiplied by the number of distinct sets; the shared set counts once. The existing 15-question limit remains in force and can prevent a large class generation. This feature currently generates text-only questions (zero image credits). A failed batch refunds its reservation.
+
+Generated sets are saved in teacher-private `personalizedDrafts`. Teachers can switch sets, edit wording, answers, difficulty/topics and marking mode, save edits, resume saved drafts, then publish. Each set keeps its configured question count. Published assignments and questions are fixed; make a new exercise for a new round. Students without a completed source result are not assigned this round.
+
+The public exercise document contains no personalized sets or answer keys. An authenticated, App Check protected callable returns only the requesting active student's assigned questions, with answers removed. A separate callable grades against the saved answers and writes a single submission transactionally. MCQ uses exact answer matching. Typed answers can use exact automatic matching or await teacher marking. Existing teacher reports consume each submission's actual question results and topic labels. Prior normal exercises still use the existing grading/storage workflow; their historical marks are not retroactively changed.
+
+Validation: `npm --prefix functions run build`, `node --test functions/tests/personalization.test.mjs`, `npx tsc --noEmit`, `npm run build`. Tests use an in-memory Firestore adapter and mocked Vertex responses; they do not consume live credits or create production student data. They cover threshold boundaries, weighted scores, incomplete marks, quota rejection/refund, draft/publish separation, private/shared delivery, unauthorized access, server marking and duplicate submission rejection.

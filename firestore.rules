@@ -104,15 +104,20 @@ service cloud.firestore {
       match /exercises/{exerciseId} {
         allow read: if signedIn()
           && (ownsClassroom(classroomId) || isActiveMember(classroomId) || isAdmin());
-        allow write: if ownsClassroom(classroomId);
+        allow create: if ownsClassroom(classroomId) && !request.resource.data.keys().hasAny(['personalized', 'personalizedDraftId']);
+        allow update: if ownsClassroom(classroomId) && !resource.data.get('personalized', false)
+          && !request.resource.data.keys().hasAny(['personalized', 'personalizedDraftId']);
+        allow delete: if ownsClassroom(classroomId);
 
         match /submissions/{submissionId} {
           allow read: if signedIn()
             && (request.auth.uid == resource.data.studentId || ownsClassroom(classroomId) || isAdmin());
           allow create: if signedIn()
+            && !get(/databases/$(database)/documents/classrooms/$(classroomId)/exercises/$(exerciseId)).data.get('personalized', false)
             && request.auth.uid == request.resource.data.studentId;
           allow update, delete: if signedIn()
-            && (request.auth.uid == resource.data.studentId || ownsClassroom(classroomId));
+            && (ownsClassroom(classroomId) || (request.auth.uid == resource.data.studentId
+              && !get(/databases/$(database)/documents/classrooms/$(classroomId)/exercises/$(exerciseId)).data.get('personalized', false)));
         }
       }
 
@@ -125,6 +130,11 @@ service cloud.firestore {
     // AI workflow data is readable only by the owning teacher/reviewer. All
     // mutations go through callable functions using the Admin SDK.
     match /materials/{materialId} {
+      allow read: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /personalizedDrafts/{draftId} {
       allow read: if signedIn() && resource.data.ownerId == request.auth.uid;
       allow write: if false;
     }

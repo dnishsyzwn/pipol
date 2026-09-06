@@ -5660,7 +5660,23 @@ function Classroom({
   );
 }
 
-function StudentExerciseRunner({
+function StudentExerciseRunner(props: { role?: Role | null; user: User; classroom: ClassroomData; exercise: any; onBack: () => void; onExit: () => void }) {
+  const [loaded, setLoaded] = useState<any>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!props.exercise.personalized) return;
+    setLoaded(null); setError('');
+    let active = true;
+    httpsCallable(functions, 'getPersonalizedQuestions')({ classroomId: props.classroom.id, exerciseId: props.exercise.id })
+      .then(result => { if (active) setLoaded({ ...props.exercise, ...(result.data as object) }); })
+      .catch(err => { if (active) setError(friendlyError(err)); });
+    return () => { active = false; };
+  }, [props.classroom.id, props.exercise.id]);
+  if (props.exercise.personalized && loaded?.id !== props.exercise.id) return <AppShell role={props.role || 'student'} user={props.user} onExit={props.onExit} active="classroom" classCount={1}><button onClick={props.onBack}>Back to classroom</button><p role="status">{error || 'Loading your assigned exercise…'}</p></AppShell>;
+  return <StudentExerciseRunnerContent {...props} exercise={loaded || props.exercise} />;
+}
+
+function StudentExerciseRunnerContent({
   role,
   user,
   classroom,
@@ -5944,6 +5960,7 @@ function StudentExerciseRunner({
         return {
           ...r,
           isCorrect: markAsCorrect,
+          pendingReview: false,
           teacherRemarked: markAsCorrect,
           remarkedAt: markAsCorrect ? new Date().toISOString() : undefined,
           pointsEarned: earned,
@@ -6052,7 +6069,14 @@ function StudentExerciseRunner({
       setIsLateSubmission(isLate);
 
       // Save using user.uid as document ID so each student has strictly one submission
-      await setDoc(
+      if (exercise.personalized) {
+        const response = await httpsCallable(functions, 'submitPersonalizedExercise')({ classroomId: classroom.id, exerciseId: exercise.id, answers });
+        const result = response.data as { score: number; totalCorrect: number; totalWrong: number; questionResults: QuestionResult[] };
+        setEarnedScore(result.score);
+        setTotalCorrectState(result.totalCorrect);
+        setTotalWrongState(result.totalWrong);
+        setMyQuestionResults(result.questionResults);
+      } else await setDoc(
         doc(
           db,
           'classrooms',
@@ -6161,7 +6185,7 @@ function StudentExerciseRunner({
   const progressPct = Math.round(
     ((currentIdx + 1) / (rawQuestions.length || 1)) * 100,
   );
-  const studentResults = computeSubmissionStats({ answers }, exercise).questionResults;
+  const studentResults = exercise.personalized ? myQuestionResults : computeSubmissionStats({ answers }, exercise).questionResults;
   const studentDifficultyBreakdown = summarizeDifficulty(studentResults);
   const studentCapability = capabilityFromResults(studentResults);
 
@@ -6708,7 +6732,7 @@ function StudentExerciseRunner({
                         <em style={{ color: '#999' }}>No answer provided</em>
                       )}
                     </div>
-                    {q.answer && (
+                    {(qRes?.expectedAnswer || q.answer) && (
                       <div
                         style={{
                           fontSize: '0.78rem',
@@ -6716,7 +6740,7 @@ function StudentExerciseRunner({
                           marginTop: 3,
                         }}
                       >
-                        <strong>Expected answer:</strong> {q.answer}
+                        <strong>Expected answer:</strong> {qRes?.expectedAnswer || q.answer}
                       </div>
                     )}
                   </div>
@@ -7638,6 +7662,16 @@ function QuizBuilder({
   const isEditing = Boolean(initialExercise);
   const [title, setTitle] = useState(initialExercise?.title || '');
   const [titleError, setTitleError] = useState('');
+  const [personalized, setPersonalized] = useState(Boolean(initialExercise?.personalized));
+  const [previousExercises, setPreviousExercises] = useState<Array<{ id: string; title: string }>>([]);
+  const [sourceExerciseId, setSourceExerciseId] = useState('');
+  const [personalType, setPersonalType] = useState<'short_answer' | 'multiple_choice'>('short_answer');
+  const [personalDraftId, setPersonalDraftId] = useState('');
+  const [personalSets, setPersonalSets] = useState<Array<{ key: string; label: string; percentage: number | null; weakTopics: string[]; questions: QuestionItem[] }>>([]);
+  const [activeSet, setActiveSet] = useState('');
+  const [personalEstimate, setPersonalEstimate] = useState<{ credits: number; sets: number; students: number; skipped: string[]; focusCount: number } | null>(null);
+  const [personalError, setPersonalError] = useState('');
+  const [savedPersonalDrafts, setSavedPersonalDrafts] = useState<Array<{ id: string; title?: string; deadline?: string; allowLateSubmissions?: boolean; variants: any[] }>>([]);
   const [deadline, setDeadline] = useState(initialExercise?.deadline || '');
   const [allowLateSubmissions, setAllowLateSubmissions] = useState(
     initialExercise ? initialExercise.allowLateSubmissions !== false : true,
@@ -7725,6 +7759,43 @@ function QuizBuilder({
   const [quickGenerateError, setQuickGenerateError] = useState('');
   const [classroomTags, setClassroomTags] = useState<Array<{ id: string; kind: string; label: string }>>([]);
 
+  useEffect(() => onSnapshot(query(collection(db, 'personalizedDrafts'), where('ownerId', '==', user.uid)), snapshot => {
+    setSavedPersonalDrafts(snapshot.docs.filter(d => d.get('classroomId') === classroom.id && d.get('status') === 'draft').map(d => ({ id: d.id, ...d.data(), variants: d.get('variants') })));
+  }, () => {}), [classroom.id, user.uid]);
+
+  useEffect(() => onSnapshot(collection(db, 'classrooms', classroom.id, 'exercises'), snapshot => {
+    const list = snapshot.docs.filter(d => d.id !== initialExercise?.id).sort((a,b) => (b.get('createdAt')?.toMillis?.() || 0) - (a.get('createdAt')?.toMillis?.() || 0)).map(d => ({ id: d.id, title: String(d.get('title') || 'Untitled') }));
+    setPreviousExercises(list);
+    setSourceExerciseId(current => current || list[0]?.id || '');
+  }), [classroom.id, initialExercise?.id]);
+
+  useEffect(() => {
+    if (!personalized || !sourceExerciseId || personalDraftId) return;
+    let active = true;
+    setPersonalEstimate(null); setPersonalError('');
+    httpsCallable(functions, 'generatePersonalizedExercise')({ classroomId: classroom.id, sourceId: sourceExerciseId, questionCount: Number(questionCount), preview: true })
+      .then(r => { if (active) setPersonalEstimate(r.data as any); })
+      .catch(e => { if (active) setPersonalError(friendlyError(e)); });
+    return () => { active = false; };
+  }, [personalized, sourceExerciseId, questionCount, personalDraftId, classroom.id]);
+
+  const generatePersonalized = async () => {
+    setGenerating(true); setPersonalError('');
+    const notice = toast.add({ title: 'Creating personalized practice', description: 'AI is generating the shared set and individual weak-topic sets.', type: 'info', timeout: 0 });
+    try {
+      const r = await httpsCallable(functions, 'generatePersonalizedExercise', { timeout: 540000 })({ classroomId: classroom.id, sourceId: sourceExerciseId, questionCount: Number(questionCount), prompt: aiPrompt, questionType: personalType });
+      const draft = r.data as { draftId: string; variants: typeof personalSets };
+      setPersonalDraftId(draft.draftId); setPersonalSets(draft.variants); setActiveSet(draft.variants[0].key); setQuestions(draft.variants[0].questions);
+      toast.add({ title: 'Personalized drafts ready', description: 'Review each set using the selector below before publishing.', type: 'success', timeout: 8000 });
+    } catch (e) { setPersonalError(friendlyError(e)); }
+    finally { toast.close(notice); setGenerating(false); }
+  };
+
+  const switchPersonalSet = (key: string) => {
+    const saved = personalSets.map(v => v.key === activeSet ? { ...v, questions } : v);
+    setPersonalSets(saved); setActiveSet(key); setQuestions(saved.find(v => v.key === key)!.questions);
+  };
+
   useEffect(() => onSnapshot(collection(db, 'classrooms', classroom.id, 'tags'), (snapshot) => {
     setClassroomTags(snapshot.docs.map((item) => ({ id: item.id, kind: String(item.get('kind') || 'topic'), label: String(item.get('label') || '') })).filter((item) => item.label));
   }), [classroom.id]);
@@ -7738,6 +7809,7 @@ function QuizBuilder({
   const onFileDrop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); addSourceFiles(Array.from(event.dataTransfer.files)); };
 
   const addQuestion = () => {
+    if (personalized) return;
     if (questions.length >= 15) return;
     setQuestions((prev) => [
       ...prev,
@@ -7768,6 +7840,7 @@ function QuizBuilder({
   };
 
   const removeQuestion = (index: number) => {
+    if (personalized) return;
     if (questions.length <= 1) return;
     setQuestions((prev) => prev.filter((_, i) => i !== index));
   };
@@ -7834,7 +7907,7 @@ function QuizBuilder({
   };
 
   const hasEnhancedAny = questions.some((q) => q.enhanced);
-  const isValid = title.trim() && questions.some((q) => q.question.trim());
+  const isValid = title.trim() && questions.some((q) => q.question.trim()) && (!personalized || Boolean(personalDraftId));
   const generateWithAi = async () => {
     const remainingQuestions = Math.max(0, 15 - quota.questionsUsed);
     const remainingImages = Math.max(0, 5 - quota.imagesUsed);
@@ -7906,6 +7979,17 @@ function QuizBuilder({
   };
 
   const publish = async () => {
+    if (personalized) {
+      if (!personalDraftId || !title.trim()) { setPersonalError('Generate and review the personalized draft, and enter a title first.'); return; }
+      setPublishing(true);
+      try {
+        const variants = personalSets.map(v => ({ key: v.key, questions: (v.key === activeSet ? questions : v.questions).map(q => ({ ...q, type: q.type || 'short_answer', markingMode: q.markingMode || 'automatic', difficulty: q.difficulty || 'medium' })) }));
+        await httpsCallable(functions, 'publishPersonalizedExercise')({ draftId: personalDraftId, title: title.trim(), deadline: deadline || null, allowLateSubmissions, variants });
+        setPublished(true); onBack();
+      } catch (e) { setPersonalError(friendlyError(e)); }
+      finally { setPublishing(false); }
+      return;
+    }
     if (!title.trim()) {
       setTitleError('Please enter an exercise name before saving.');
       return;
@@ -8002,6 +8086,17 @@ function QuizBuilder({
     } finally {
       setPublishing(false);
     }
+  };
+
+  const savePersonalDraft = async () => {
+    if (!title.trim()) { setPersonalError('Enter an exercise title before saving.'); return; }
+    setPublishing(true);
+    try {
+      const variants = personalSets.map(v => ({ key: v.key, questions: (v.key === activeSet ? questions : v.questions).map(q => ({ ...q, type: q.type || 'short_answer', markingMode: q.markingMode || 'automatic', difficulty: q.difficulty || 'medium' })) }));
+      await httpsCallable(functions, 'publishPersonalizedExercise')({ draftId: personalDraftId, title: title.trim(), deadline: deadline || null, allowLateSubmissions, variants, saveOnly: true });
+      toast.add({ title: 'Draft saved', description: 'Your edited question sets are saved. Resume them from the personalized exercise section.', type: 'success', timeout: 6000 });
+    } catch (e) { setPersonalError(friendlyError(e)); }
+    finally { setPublishing(false); }
   };
 
   return (
@@ -8301,6 +8396,7 @@ function QuizBuilder({
               <input
                 type="checkbox"
                 checked={isExam}
+                disabled={personalized}
                 onChange={(e) => setIsExam(e.target.checked)}
                 style={{ accentColor: '#b45309', width: 15, height: 15 }}
               />
@@ -8468,6 +8564,31 @@ function QuizBuilder({
         </div>
       </div>
       <section style={{ background: '#fff', border: '1px solid #dfe8df', borderRadius: 22, padding: '1.5rem', marginBottom: '1.8rem' }}>
+        <label style={{ display: 'flex', gap: 12, alignItems: 'center', fontWeight: 700 }}><input type="checkbox" checked={personalized} disabled={generating || Boolean(initialExercise?.personalized)} onChange={e => { setPersonalized(e.target.checked); setIsExam(false); setShuffleQuestions(false); }} />Personalized exercise · AI-generated</label>
+        <p>60% and above: one shared new practice set. Below 60%: an individual set with approximately 70% weak-topic practice and 30% reinforcement.</p>
+        {personalized && <div style={{ display: 'grid', gap: 14 }}>
+          {initialExercise?.personalized ? <p>This personalized exercise is published. Create a new exercise to generate another round from updated results.</p> : <>
+          {!personalDraftId && <>
+            <label>Previous exercise<select value={sourceExerciseId} disabled={generating} onChange={e => setSourceExerciseId(e.target.value)} style={{ display: 'block', width: '100%', padding: 10 }}><option value="">Choose an exercise</option>{previousExercises.map(e => <option key={e.id} value={e.id}>{e.title}</option>)}</select></label>
+            <label>Questions per student<Input type="number" min={2} max={15} disabled={generating} value={questionCount} onChange={e => setQuestionCount(Math.max(2, Math.min(15, Number(e.target.value) || 2)))} /></label>
+            <label>Question type<select value={personalType} disabled={generating} onChange={e => setPersonalType(e.target.value as typeof personalType)} style={{ display: 'block', padding: 10 }}><option value="short_answer">Typed answer</option><option value="multiple_choice">Multiple choice</option></select></label>
+            <label>Additional teacher instructions<Textarea value={aiPrompt} disabled={generating} onChange={e => setAiPrompt(e.target.value)} placeholder="Optional guidance for the AI" /></label>
+            {personalEstimate && <p>{personalEstimate.students} students · {personalEstimate.sets} AI-generated sets · {personalEstimate.credits} question credits needed ({Math.max(0, 15 - quota.questionsUsed)} remaining). Targeted sets contain {personalEstimate.focusCount} weak-topic questions and {questionCount - personalEstimate.focusCount} reinforcement questions. {personalEstimate.skipped.length > 0 && `${personalEstimate.skipped.length} students are excluded because their results are missing or marking is unfinished.`}</p>}
+            <p>Uses the selected exercise and topic results. These sets are text-only and use no image credits. The shared set is charged once; each individual set uses its own credits.</p>
+            <Button onClick={generatePersonalized} disabled={generating || !personalEstimate || personalEstimate.credits > Math.max(0, 15 - quota.questionsUsed)}>{generating ? 'Generating personalized drafts…' : 'Generate personalized drafts'}</Button>
+            {savedPersonalDrafts.length > 0 && <label>Resume a saved AI draft<select defaultValue="" onChange={e => { const draft = savedPersonalDrafts.find(d => d.id === e.target.value); if (draft) { setPersonalDraftId(draft.id); setPersonalSets(draft.variants); setActiveSet(draft.variants[0].key); setQuestions(draft.variants[0].questions); setTitle(draft.title || title); setDeadline(draft.deadline || ''); setAllowLateSubmissions(draft.allowLateSubmissions !== false); } }}><option value="">Select saved draft</option>{savedPersonalDrafts.map((d,i) => <option key={d.id} value={d.id}>{d.title || `Draft ${i + 1}`} · {d.variants.length} sets</option>)}</select></label>}
+          </>}
+          {personalDraftId && <>
+            <p>AI draft saved. Review and edit every set below, then publish when ready. Keep the same question count in each set.</p>
+            <label>Review question set<select value={activeSet} onChange={e => switchPersonalSet(e.target.value)} style={{ display: 'block', width: '100%', padding: 10 }}>{personalSets.map(v => <option key={v.key} value={v.key}>{v.label}{v.percentage !== null ? ` · ${v.percentage.toFixed(1)}% previously` : ''}</option>)}</select></label>
+            <p>Focus topics: {personalSets.find(v => v.key === activeSet)?.weakTopics.join(', ') || 'Previous exercise topics — shared reinforcement'}</p>
+            <Button onClick={savePersonalDraft} disabled={publishing}>Save edited draft</Button>
+          </>}
+          </>}
+          {personalError && <p role="alert" style={{ color: '#a00' }}>{personalError} <button onClick={() => void navigator.clipboard.writeText(personalError)}>Copy error</button></p>}
+        </div>}
+      </section>
+      {!personalized && <section style={{ background: '#fff', border: '1px solid #dfe8df', borderRadius: 22, padding: '1.5rem', marginBottom: '1.8rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
           <div><span className="kicker">Generate with SLearn AI</span><h2 style={{ margin: '.25rem 0' }}>Turn instructions or notes into a quiz draft</h2><p style={{ margin: 0, color: '#66736b' }}>The result stays editable and never publishes automatically.</p></div>
           <div style={{ display: 'flex', gap: '.5rem', fontSize: '.82rem', fontWeight: 700 }}><span style={{ padding: '.5rem .75rem', background: '#edf7df', borderRadius: 999 }}>{Math.max(0, 15 - quota.questionsUsed)}/15 questions left</span><span style={{ padding: '.5rem .75rem', background: '#fff0d4', borderRadius: 999 }}>{Math.max(0, 5 - quota.imagesUsed)}/5 images left</span></div>
@@ -8483,8 +8604,8 @@ function QuizBuilder({
           <label className="form-label">AI-generated images<Input type="number" min={0} max={Math.min(5, Math.max(0, 5 - quota.imagesUsed))} value={imageCount} onChange={(event) => setImageCount(Math.max(0, Math.min(5, Number(event.target.value) || 0)))}/></label>
           <Button type="button" onClick={generateWithAi} disabled={generating || questionCount > Math.max(0, 15 - quota.questionsUsed) || imageCount > Math.max(0, 5 - quota.imagesUsed)} className="primary-action">{generating ? <LoaderCircle/> : <WandSparkles/>}{generating ? 'Generating draft…' : 'Generate editable draft'}</Button>
         </div>
-      </section>
-      <div className="builder-grid">
+      </section>}
+      <div className="builder-grid" style={personalized && !personalDraftId ? { display: 'none' } : undefined}>
         <section
           className="question-editor"
           style={{ display: 'grid', gap: '1.5rem' }}
