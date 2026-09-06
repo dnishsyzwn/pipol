@@ -11,6 +11,7 @@ import {
   Eye,
   EyeOff,
   GraduationCap,
+  KeyRound,
   LayoutDashboard,
   LoaderCircle,
   LockKeyhole,
@@ -18,6 +19,7 @@ import {
   Mail,
   Menu,
   Search,
+  Send,
   ShieldCheck,
   Users,
   X,
@@ -99,6 +101,7 @@ const dateLabel = (value?: Timestamp) => {
 };
 
 function AdminLogin() {
+  const [adminMode, setAdminMode] = useState<'login' | 'reset'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -128,15 +131,21 @@ function AdminLogin() {
     }
   };
 
-  const resetPassword = async () => {
+  const resetPassword = async (event?: SyntheticEvent<HTMLFormElement>) => {
+    if (event) event.preventDefault();
     if (!email.trim()) {
-      setMessage('Enter your admin email first, then select Forgot password.');
+      setMessage('Enter your admin email address to receive a password reset link.');
       return;
     }
     setBusy(true);
+    setMessage('');
     try {
-      await sendPasswordResetEmail(auth, email.trim());
-      setMessage('Password reset email sent. Check your inbox.');
+      const actionCodeSettings = typeof window !== 'undefined' ? {
+        url: `${window.location.origin}/?mode=resetPassword`,
+        handleCodeInApp: true,
+      } : undefined;
+      await sendPasswordResetEmail(auth, email.trim(), actionCodeSettings);
+      setMessage('Password reset email sent! Please check your inbox and spam folder.');
     } catch (error) {
       setMessage(friendlyError(error));
     } finally {
@@ -152,36 +161,50 @@ function AdminLogin() {
       </Link>
       <section className="admin-login-card">
         <div className="admin-login-intro">
-          <span className="admin-lock"><ShieldCheck /></span>
-          <p className="admin-eyebrow">Secure workspace</p>
-          <h1>Admin portal</h1>
-          <p>View platform activity, users and classrooms from one focused dashboard.</p>
+          <span className="admin-lock">{adminMode === 'reset' ? <KeyRound /> : <ShieldCheck />}</span>
+          <p className="admin-eyebrow">{adminMode === 'reset' ? 'Password recovery' : 'Secure workspace'}</p>
+          <h1>{adminMode === 'reset' ? 'Reset password' : 'Admin portal'}</h1>
+          <p>{adminMode === 'reset' ? 'Receive a secure link to restore access to your admin workspace.' : 'View platform activity, users and classrooms from one focused dashboard.'}</p>
           <div className="admin-login-points">
             <span><Users /> User oversight</span>
             <span><BookOpen /> Classroom health</span>
             <span><BarChart3 /> Platform reports</span>
           </div>
         </div>
-        <form className="admin-login-form" onSubmit={login}>
+        <form className="admin-login-form" onSubmit={adminMode === 'reset' ? resetPassword : login}>
           <div>
-            <p className="admin-eyebrow">Authorised access only</p>
-            <h2>Welcome back</h2>
-            <p>Sign in with an account assigned the admin role.</p>
+            <p className="admin-eyebrow">{adminMode === 'reset' ? 'Account recovery' : 'Authorised access only'}</p>
+            <h2>{adminMode === 'reset' ? 'Forgot password?' : 'Welcome back'}</h2>
+            <p>{adminMode === 'reset' ? 'Enter your admin email to receive a password reset link.' : 'Sign in with an account assigned the admin role.'}</p>
           </div>
           <label>
             Email address
             <span className="admin-field"><Mail /><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@example.com" required /></span>
           </label>
-          <label>
-            Password
-            <span className="admin-field"><LockKeyhole /><input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" required /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff /> : <Eye />}</button></span>
-          </label>
-          <button className="admin-forgot" type="button" onClick={resetPassword}>Forgot password?</button>
+          {adminMode === 'login' && (
+            <label>
+              Password
+              <span className="admin-field"><LockKeyhole /><input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" required /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff /> : <Eye />}</button></span>
+            </label>
+          )}
+          {adminMode === 'login' && (
+            <button className="admin-forgot" type="button" onClick={() => { setAdminMode('reset'); setMessage(''); }}>Forgot password?</button>
+          )}
           {message && <p className="admin-form-message"><CircleAlert /> {message}</p>}
-          <button className="admin-primary admin-login-button" disabled={busy} type="submit">{busy ? <LoaderCircle className="spin" /> : <ShieldCheck />} Sign in as admin</button>
-          <div className="admin-divider"><span>or</span></div>
-          <button className="admin-google" disabled={busy} type="button" onClick={googleLogin}><span>G</span> Continue with Google</button>
-          <Link className="admin-back" href="/">Back to SLearn</Link>
+          {adminMode === 'reset' ? (
+            <button className="admin-primary admin-login-button" disabled={busy || !email.trim()} type="submit">{busy ? <LoaderCircle className="spin" /> : <Send />} Send reset link</button>
+          ) : (
+            <button className="admin-primary admin-login-button" disabled={busy} type="submit">{busy ? <LoaderCircle className="spin" /> : <ShieldCheck />} Sign in as admin</button>
+          )}
+          {adminMode === 'reset' ? (
+            <button type="button" className="admin-back" onClick={() => { setAdminMode('login'); setMessage(''); }}>Back to admin login</button>
+          ) : (
+            <>
+              <div className="admin-divider"><span>or</span></div>
+              <button className="admin-google" disabled={busy} type="button" onClick={googleLogin}><span>G</span> Continue with Google</button>
+              <Link className="admin-back" href="/">Back to SLearn</Link>
+            </>
+          )}
         </form>
       </section>
     </main>

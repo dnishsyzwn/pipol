@@ -3,7 +3,17 @@
 import { useEffect, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
 import type { User } from 'firebase/auth';
-import { createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
+import {
+  confirmPasswordReset,
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  updateProfile,
+  verifyPasswordResetCode,
+} from 'firebase/auth';
 import {
   addDoc,
   collection,
@@ -42,6 +52,7 @@ import {
   GraduationCap,
   Eye,
   EyeOff,
+  KeyRound,
   LayoutDashboard,
   LoaderCircle,
   Lock,
@@ -549,7 +560,7 @@ function LoginPage({
  onAuth: (params: AuthParams) => Promise<void>;
 }){
  const [modalOpen, setModalOpen] = useState(false);
- const [authMode, setAuthMode] = useState<'login'|'signup'>('signup');
+ const [authMode, setAuthMode] = useState<'login'|'signup'|'reset'>('signup');
  const [authRole, setAuthRole] = useState<Role>('student');
  const [name, setName] = useState('');
  const [email, setEmail] = useState('');
@@ -559,7 +570,7 @@ function LoginPage({
  const [modalError, setModalError] = useState('');
  const [resetMessage, setResetMessage] = useState('');
 
- const openModal = (mode: 'login'|'signup', role?: Role) => {
+ const openModal = (mode: 'login'|'signup'|'reset', role?: Role) => {
   setAuthMode(mode);
   if (role) setAuthRole(role);
   setModalError('');
@@ -568,33 +579,38 @@ function LoginPage({
   setModalOpen(true);
  };
 
- const switchMode = (mode: 'login'|'signup') => {
+ const switchMode = (mode: 'login'|'signup'|'reset') => {
   setAuthMode(mode);
   setModalError('');
   setResetMessage('');
   setShowPassword(false);
  };
 
- const handleForgotPassword = async () => {
-  if (!email.trim()) {
-   setModalError('Enter your email address first, then select Forgot password.');
-   return;
-  }
-  setModalBusy(true);
-  setModalError('');
-  setResetMessage('');
-  try {
-   await sendPasswordResetEmail(auth, email.trim());
-   setResetMessage('Password reset email sent. Check your inbox and spam folder.');
-  } catch (err: any) {
-   setModalError(err?.message || 'Could not send the reset email. Please try again.');
-  } finally {
-   setModalBusy(false);
-  }
- };
-
  const handleEmailSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
+  if (authMode === 'reset') {
+   if (!email.trim()) {
+    setModalError('Please enter your email address.');
+    return;
+   }
+   setModalBusy(true);
+   setModalError('');
+   setResetMessage('');
+   try {
+    const actionCodeSettings = typeof window !== 'undefined' ? {
+      url: `${window.location.origin}/?mode=resetPassword`,
+      handleCodeInApp: true,
+    } : undefined;
+    await sendPasswordResetEmail(auth, email.trim(), actionCodeSettings);
+    setResetMessage('Password reset link sent! Please check your inbox and spam folder.');
+   } catch (err: any) {
+    setModalError(err?.message || 'Could not send the reset email. Please try again.');
+   } finally {
+    setModalBusy(false);
+   }
+   return;
+  }
+
   if (!email.trim() || !password.trim()) {
    setModalError('Please enter both email and password.');
    return;
@@ -608,7 +624,7 @@ function LoginPage({
   try {
    await onAuth({
     provider: 'email',
-    mode: authMode,
+    mode: authMode === 'signup' ? 'signup' : 'login',
     role: authMode === 'signup' ? authRole : null,
     email: email.trim(),
     password,
@@ -628,7 +644,7 @@ function LoginPage({
   try {
    await onAuth({
     provider: 'google',
-    mode: authMode,
+    mode: authMode === 'signup' ? 'signup' : 'login',
     role: authMode === 'signup' ? authRole : null
    });
    setModalOpen(false);
@@ -697,169 +713,573 @@ function LoginPage({
     </div>
    </section>
 
-   <Dialog open={modalOpen} onOpenChange={setModalOpen}>
-    <DialogContent className="modal-card">
-     <DialogHeader>
-      <DialogTitle>{authMode === 'signup' ? 'Create your account' : 'Welcome back'}</DialogTitle>
-      <DialogDescription>
-       {authMode === 'signup'
-        ? (authRole === 'teacher' ? 'Sign up as a teacher to create classrooms and guided exercises.' : 'Sign up as a student to join classes and track your learning.')
-        : 'Sign in to your SLearn account using email & password or Google.'}
-      </DialogDescription>
-     </DialogHeader>
-
-     {authMode === 'signup' && (
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', background: '#f1ece5', padding: '4px', borderRadius: '14px', marginTop: '4px' }}>
-       <button
-        type="button"
-        onClick={() => setAuthRole('student')}
+    <Dialog open={modalOpen} onOpenChange={setModalOpen}>
+     <DialogContent className="modal-card">
+      <DialogHeader>
+       <div
         style={{
-         display: 'flex',
+         display: 'inline-flex',
          alignItems: 'center',
          justifyContent: 'center',
-         gap: '8px',
-         padding: '9px 12px',
-         borderRadius: '10px',
-         border: 0,
-         fontSize: '0.84rem',
-         fontWeight: 700,
-         cursor: 'pointer',
-         background: authRole === 'student' ? '#111' : 'transparent',
-         color: authRole === 'student' ? '#fff' : '#555',
-         transition: 'all 0.15s'
+         width: 44,
+         height: 44,
+         borderRadius: '16px',
+         background: '#f1ece5',
+         color: '#111',
+         marginBottom: 6,
         }}
        >
-        <BookOpen style={{ width: 16, height: 16 }} />
-        Student
-       </button>
-       <button
-        type="button"
-        onClick={() => setAuthRole('teacher')}
-        style={{
-         display: 'flex',
-         alignItems: 'center',
-         justifyContent: 'center',
-         gap: '8px',
-         padding: '9px 12px',
-         borderRadius: '10px',
-         border: 0,
-         fontSize: '0.84rem',
-         fontWeight: 700,
-         cursor: 'pointer',
-         background: authRole === 'teacher' ? '#111' : 'transparent',
-         color: authRole === 'teacher' ? '#fff' : '#555',
-         transition: 'all 0.15s'
-        }}
-       >
-        <GraduationCap style={{ width: 16, height: 16 }} />
-        Teacher
-       </button>
-      </div>
-     )}
+        {authMode === 'reset' ? (
+         <KeyRound style={{ width: 20, height: 20 }} />
+        ) : authMode === 'signup' ? (
+         <Sparkles style={{ width: 20, height: 20 }} />
+        ) : (
+         <LogIn style={{ width: 20, height: 20 }} />
+        )}
+       </div>
+       <DialogTitle>
+        {authMode === 'signup'
+         ? 'Create your account'
+         : authMode === 'reset'
+           ? 'Forgot password?'
+           : 'Welcome back'}
+       </DialogTitle>
+       <DialogDescription>
+        {authMode === 'signup'
+         ? (authRole === 'teacher'
+            ? 'Sign up as a teacher to create classrooms and guided exercises.'
+            : 'Sign up as a student to join classes and track your learning.')
+         : authMode === 'reset'
+           ? "Enter your email address and we'll send you a link to reset your password."
+           : 'Sign in to your SLearn account using email & password or Google.'}
+       </DialogDescription>
+      </DialogHeader>
 
-     <form onSubmit={handleEmailSubmit} style={{ display: 'grid', gap: '11px', marginTop: '6px' }}>
       {authMode === 'signup' && (
-       <label className="form-label">
-        Full Name
-        <Input
-         placeholder="e.g. Alex Tan"
-         value={name}
-         onChange={e => setName(e.target.value)}
-         disabled={modalBusy}
-        />
-       </label>
+       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', background: '#f1ece5', padding: '4px', borderRadius: '14px', marginTop: '4px' }}>
+        <button
+         type="button"
+         onClick={() => setAuthRole('student')}
+         style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '8px',
+          padding: '9px 12px',
+          borderRadius: '10px',
+          border: 0,
+          fontSize: '0.84rem',
+          fontWeight: 700,
+          cursor: 'pointer',
+          background: authRole === 'student' ? '#111' : 'transparent',
+          color: authRole === 'student' ? '#fff' : '#555',
+          transition: 'all 0.15s'
+         }}
+        >
+         <BookOpen style={{ width: 16, height: 16 }} />
+         Student
+        </button>
+        <button
+         type="button"
+         onClick={() => setAuthRole('teacher')}
+         style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '8px',
+          padding: '9px 12px',
+          borderRadius: '10px',
+          border: 0,
+          fontSize: '0.84rem',
+          fontWeight: 700,
+          cursor: 'pointer',
+          background: authRole === 'teacher' ? '#111' : 'transparent',
+          color: authRole === 'teacher' ? '#fff' : '#555',
+          transition: 'all 0.15s'
+         }}
+        >
+         <GraduationCap style={{ width: 16, height: 16 }} />
+         Teacher
+        </button>
+       </div>
       )}
 
-      <label className="form-label">
-       Email Address
-       <Input
-        type="email"
-        placeholder="name@example.com"
-        value={email}
-        onChange={e => setEmail(e.target.value)}
-        disabled={modalBusy}
-        required
-       />
-      </label>
+      <form onSubmit={handleEmailSubmit} style={{ display: 'grid', gap: '11px', marginTop: '6px' }}>
+       {authMode === 'signup' && (
+        <label className="form-label">
+         Full Name
+         <Input
+          placeholder="e.g. Alex Tan"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          disabled={modalBusy}
+         />
+        </label>
+       )}
 
-      <div className="form-label">
-       <div className="password-label-row"><span>Password</span>{authMode === 'login' && <button type="button" onClick={handleForgotPassword} disabled={modalBusy}>Forgot password?</button>}</div>
-       <div className="password-field">
+       <label className="form-label">
+        Email Address
         <Input
-         type={showPassword ? 'text' : 'password'}
-         placeholder={authMode === 'signup' ? 'At least 6 characters' : 'Enter your password'}
-         value={password}
-         onChange={e => setPassword(e.target.value)}
+         type="email"
+         placeholder="name@example.com"
+         value={email}
+         onChange={e => setEmail(e.target.value)}
          disabled={modalBusy}
          required
         />
-        <button type="button" className="password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} title={showPassword ? 'Hide password' : 'Show password'}>
-         {showPassword ? <EyeOff/> : <Eye/>}
+       </label>
+
+       {authMode !== 'reset' && (
+        <div className="form-label">
+         <div className="password-label-row">
+          <span>Password</span>
+          {authMode === 'login' && (
+           <button
+            type="button"
+            onClick={() => switchMode('reset')}
+            disabled={modalBusy}
+           >
+            Forgot password?
+           </button>
+          )}
+         </div>
+         <div className="password-field">
+          <Input
+           type={showPassword ? 'text' : 'password'}
+           placeholder={authMode === 'signup' ? 'At least 6 characters' : 'Enter your password'}
+           value={password}
+           onChange={e => setPassword(e.target.value)}
+           disabled={modalBusy}
+           required
+          />
+          <button type="button" className="password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} title={showPassword ? 'Hide password' : 'Show password'}>
+           {showPassword ? <EyeOff/> : <Eye/>}
+          </button>
+         </div>
+        </div>
+       )}
+
+       {modalError && <p className="form-error" style={{ marginTop: '2px' }}>{modalError}</p>}
+       {resetMessage && (
+        <div
+         style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '8px',
+          background: '#f0fdf4',
+          border: '1px solid #bbf7d0',
+          borderRadius: '12px',
+          padding: '10px 14px',
+          color: '#166534',
+          fontSize: '0.85rem',
+          lineHeight: 1.45,
+          marginTop: '2px',
+         }}
+        >
+         <CheckCircle2
+          style={{
+           width: 16,
+           height: 16,
+           flexShrink: 0,
+           marginTop: 2,
+           color: '#16a34a',
+          }}
+         />
+         <span>{resetMessage}</span>
+        </div>
+       )}
+
+       <Button
+        type="submit"
+        className="primary-action"
+        disabled={modalBusy || !email.trim() || (authMode !== 'reset' && !password.trim())}
+        style={{ width: '100%', height: '46px', borderRadius: '14px', marginTop: '4px' }}
+       >
+        {modalBusy ? (
+         <LoaderCircle className="animate-spin" />
+        ) : authMode === 'signup' ? (
+         <ArrowRight />
+        ) : authMode === 'reset' ? (
+         <Send />
+        ) : (
+         <LogIn />
+        )}
+        {authMode === 'signup'
+         ? `Sign up as ${authRole === 'teacher' ? 'Teacher' : 'Student'}`
+         : authMode === 'reset'
+           ? 'Send reset link'
+           : 'Log in with Email'}
+       </Button>
+      </form>
+
+      {authMode !== 'reset' ? (
+       <>
+        <div style={{ display: 'flex', alignItems: 'center', margin: '8px 0', gap: '10px' }}>
+         <div style={{ flex: 1, height: 1, background: '#e9e4dc' }} />
+         <span style={{ fontSize: '0.68rem', color: '#8b857d', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>or</span>
+         <div style={{ flex: 1, height: 1, background: '#e9e4dc' }} />
+        </div>
+
+        <button
+         type="button"
+         disabled={modalBusy}
+         onClick={handleGoogleSubmit}
+         style={{
+          width: '100%',
+          height: '46px',
+          borderRadius: '14px',
+          background: '#fff',
+          border: '1px solid #ded8cf',
+          fontWeight: 600,
+          fontSize: '0.88rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '10px',
+          color: '#111',
+          cursor: 'pointer',
+          boxShadow: '0 2px 5px rgba(0,0,0,0.03)'
+         }}
+        >
+         <svg width="18" height="18" viewBox="0 0 24 24">
+          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+         </svg>
+         {authMode === 'signup' ? `Sign up with Google` : 'Log in with Google'}
         </button>
-       </div>
-      </div>
 
-      {modalError && <p className="form-error" style={{ marginTop: '2px' }}>{modalError}</p>}
-      {resetMessage && <p className="auth-success">{resetMessage}</p>}
-
-      <Button
-       type="submit"
-       className="primary-action"
-       disabled={modalBusy || !email.trim() || !password.trim()}
-       style={{ width: '100%', height: '46px', borderRadius: '14px', marginTop: '4px' }}
-      >
-       {modalBusy ? <LoaderCircle className="animate-spin" /> : authMode === 'signup' ? <ArrowRight /> : <LogIn />}
-       {authMode === 'signup' ? `Sign up as ${authRole === 'teacher' ? 'Teacher' : 'Student'}` : 'Log in with Email'}
-      </Button>
-     </form>
-
-     <div style={{ display: 'flex', alignItems: 'center', margin: '8px 0', gap: '10px' }}>
-      <div style={{ flex: 1, height: 1, background: '#e9e4dc' }} />
-      <span style={{ fontSize: '0.68rem', color: '#8b857d', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>or</span>
-      <div style={{ flex: 1, height: 1, background: '#e9e4dc' }} />
-     </div>
-
-     <button
-      type="button"
-      disabled={modalBusy}
-      onClick={handleGoogleSubmit}
-      style={{
-       width: '100%',
-       height: '46px',
-       borderRadius: '14px',
-       background: '#fff',
-       border: '1px solid #ded8cf',
-       fontWeight: 600,
-       fontSize: '0.88rem',
-       display: 'flex',
-       alignItems: 'center',
-       justifyContent: 'center',
-       gap: '10px',
-       color: '#111',
-       cursor: 'pointer',
-       boxShadow: '0 2px 5px rgba(0,0,0,0.03)'
-      }}
-     >
-      <svg width="18" height="18" viewBox="0 0 24 24">
-       <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-       <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-       <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-       <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-      </svg>
-      {authMode === 'signup' ? `Sign up with Google` : 'Log in with Google'}
-     </button>
-
-     <p style={{ textAlign: 'center', fontSize: '0.8rem', color: '#7a746d', margin: '10px 0 0' }}>
-      {authMode === 'signup' ? (
-       <>Already have an account? <button type="button" onClick={() => switchMode('login')} style={{ background: 'none', border: 0, fontWeight: 700, textDecoration: 'underline', color: '#111', cursor: 'pointer' }}>Log in</button></>
+        <p style={{ textAlign: 'center', fontSize: '0.8rem', color: '#7a746d', margin: '10px 0 0' }}>
+         {authMode === 'signup' ? (
+          <>Already have an account? <button type="button" onClick={() => switchMode('login')} style={{ background: 'none', border: 0, fontWeight: 700, textDecoration: 'underline', color: '#111', cursor: 'pointer' }}>Log in</button></>
+         ) : (
+          <>Don't have an account? <button type="button" onClick={() => switchMode('signup')} style={{ background: 'none', border: 0, fontWeight: 700, textDecoration: 'underline', color: '#111', cursor: 'pointer' }}>Sign up</button></>
+         )}
+        </p>
+       </>
       ) : (
-       <>Don't have an account? <button type="button" onClick={() => switchMode('signup')} style={{ background: 'none', border: 0, fontWeight: 700, textDecoration: 'underline', color: '#111', cursor: 'pointer' }}>Sign up</button></>
+       <p style={{ textAlign: 'center', fontSize: '0.82rem', color: '#7a746d', margin: '12px 0 0' }}>
+        Remember your password?{' '}
+        <button
+         type="button"
+         onClick={() => switchMode('login')}
+         style={{
+          background: 'none',
+          border: 0,
+          fontWeight: 700,
+          textDecoration: 'underline',
+          color: '#111',
+          cursor: 'pointer'
+         }}
+        >
+         Back to Log in
+        </button>
+       </p>
       )}
-     </p>
-    </DialogContent>
-   </Dialog>
+     </DialogContent>
+    </Dialog>
   </main>
  );
+}
+
+function ResetPasswordPage({
+  oobCode,
+  onDone,
+}: {
+  oobCode: string;
+  onDone: () => void;
+}) {
+  const [verifying, setVerifying] = useState(true);
+  const [verifiedEmail, setVerifiedEmail] = useState('');
+  const [verifyError, setVerifyError] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    async function verify() {
+      try {
+        const email = await verifyPasswordResetCode(auth, oobCode);
+        if (active) {
+          setVerifiedEmail(email);
+          setVerifying(false);
+        }
+      } catch (err: any) {
+        if (active) {
+          setVerifyError(
+            err?.message ||
+              'This password reset link is invalid or has expired. Please request a new one.'
+          );
+          setVerifying(false);
+        }
+      }
+    }
+    void verify();
+    return () => {
+      active = false;
+    };
+  }, [oobCode]);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPassword.trim()) {
+      setSaveError('Please enter a new password.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setSaveError('Password must be at least 6 characters.');
+      return;
+    }
+    setSubmitting(true);
+    setSaveError('');
+    try {
+      await confirmPasswordReset(auth, oobCode, newPassword);
+      setSuccess(true);
+    } catch (err: any) {
+      setSaveError(
+        err?.message || 'Could not reset password. Please try again or request a new link.'
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="welcome-page">
+      <nav className="welcome-nav">
+        <Brand />
+        <button className="login-link" onClick={onDone}>
+          <LogIn /> Log in
+        </button>
+      </nav>
+
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: 'calc(100vh - 140px)',
+          padding: '24px 16px',
+        }}
+      >
+        <div
+          className="modal-card"
+          style={{
+            width: '100%',
+            maxWidth: '460px',
+            background: '#fbfaf7',
+            borderRadius: '24px',
+            border: '1px solid #ebe5dd',
+            boxShadow: '0 30px 90px #18130e20',
+            padding: '32px 28px',
+          }}
+        >
+          {verifying ? (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '40px 0',
+                gap: '14px',
+                textAlign: 'center',
+              }}
+            >
+              <LoaderCircle className="animate-spin" style={{ width: 32, height: 32, color: '#111' }} />
+              <p style={{ fontSize: '0.92rem', color: '#6f6b64', fontWeight: 500 }}>
+                Verifying reset link…
+              </p>
+            </div>
+          ) : verifyError ? (
+            <div style={{ display: 'grid', gap: '18px', textAlign: 'center' }}>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 52,
+                  height: 52,
+                  borderRadius: '18px',
+                  background: '#fef2f2',
+                  color: '#dc2626',
+                  margin: '0 auto',
+                }}
+              >
+                <AlertCircle style={{ width: 26, height: 26 }} />
+              </div>
+              <div>
+                <h2 style={{ fontSize: '1.4rem', fontWeight: 600, color: '#111', margin: '0 0 6px' }}>
+                  Reset link expired or invalid
+                </h2>
+                <p style={{ fontSize: '0.88rem', color: '#6f6b64', lineHeight: 1.5, margin: 0 }}>
+                  {verifyError}
+                </p>
+              </div>
+              <Button
+                type="button"
+                className="primary-action"
+                onClick={onDone}
+                style={{ width: '100%', height: '46px', borderRadius: '14px', marginTop: '6px' }}
+              >
+                <ArrowLeft /> Return to login
+              </Button>
+            </div>
+          ) : success ? (
+            <div style={{ display: 'grid', gap: '18px', textAlign: 'center' }}>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 52,
+                  height: 52,
+                  borderRadius: '18px',
+                  background: '#f0fdf4',
+                  color: '#16a34a',
+                  margin: '0 auto',
+                }}
+              >
+                <CheckCircle2 style={{ width: 28, height: 28 }} />
+              </div>
+              <div>
+                <h2 style={{ fontSize: '1.45rem', fontWeight: 600, color: '#111', margin: '0 0 6px' }}>
+                  Password updated
+                </h2>
+                <p style={{ fontSize: '0.88rem', color: '#6f6b64', lineHeight: 1.5, margin: 0 }}>
+                  Your password has been successfully reset. You can now log in with your new credentials.
+                </p>
+              </div>
+              <Button
+                type="button"
+                className="primary-action"
+                onClick={onDone}
+                style={{ width: '100%', height: '46px', borderRadius: '14px', marginTop: '8px' }}
+              >
+                <LogIn /> Log in with new password
+              </Button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ marginBottom: 20 }}>
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 48,
+                    height: 48,
+                    borderRadius: '16px',
+                    background: '#f1ece5',
+                    color: '#111',
+                    marginBottom: 14,
+                  }}
+                >
+                  <KeyRound style={{ width: 22, height: 22 }} />
+                </div>
+                <h2 style={{ fontSize: '1.5rem', fontWeight: 600, color: '#111', margin: '0 0 4px' }}>
+                  Reset your password
+                </h2>
+                <p style={{ fontSize: '0.88rem', color: '#6f6b64', margin: 0 }}>
+                  for{' '}
+                  <strong style={{ color: '#111', fontWeight: 600 }}>
+                    {verifiedEmail || 'your account'}
+                  </strong>
+                </p>
+              </div>
+
+              <form onSubmit={handleSave} style={{ display: 'grid', gap: '14px' }}>
+                <div className="form-label">
+                  <div className="password-label-row">
+                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#44564c' }}>
+                      New password
+                    </span>
+                  </div>
+                  <div className="password-field">
+                    <Input
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="Enter new password (min. 6 characters)"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      disabled={submitting}
+                      required
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle"
+                      onClick={() => setShowPassword((value) => !value)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      title={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeOff /> : <Eye />}
+                    </button>
+                  </div>
+                </div>
+
+                {saveError && (
+                  <p className="form-error" style={{ marginTop: 2, marginBottom: 0 }}>
+                    {saveError}
+                  </p>
+                )}
+
+                <Button
+                  type="submit"
+                  className="primary-action"
+                  disabled={submitting || !newPassword.trim()}
+                  style={{
+                    width: '100%',
+                    height: '46px',
+                    borderRadius: '14px',
+                    marginTop: 6,
+                    fontSize: '0.92rem',
+                    fontWeight: 600,
+                  }}
+                >
+                  {submitting ? (
+                    <>
+                      <LoaderCircle className="animate-spin" /> Saving…
+                    </>
+                  ) : (
+                    'Save'
+                  )}
+                </Button>
+              </form>
+
+              <p
+                style={{
+                  textAlign: 'center',
+                  fontSize: '0.82rem',
+                  color: '#7a746d',
+                  margin: '18px 0 0',
+                }}
+              >
+                Remember your old password?{' '}
+                <button
+                  type="button"
+                  onClick={onDone}
+                  style={{
+                    background: 'none',
+                    border: 0,
+                    fontWeight: 700,
+                    textDecoration: 'underline',
+                    color: '#111',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Back to Log in
+                </button>
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </main>
+  );
 }
 type NavTarget = 'overview' | 'classes' | 'progress';
 function AppShell({
@@ -6223,7 +6643,31 @@ export default function Home() {
     [selectedClass, setSelectedClass] = useState<ClassroomData | null>(null),
     [selectedExercise, setSelectedExercise] = useState<any | null>(null),
     [detailCount, setDetailCount] = useState(0),
-    [, setProfileVersion] = useState(0);
+    [, setProfileVersion] = useState(0),
+    [resetPasswordCode, setResetPasswordCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get('mode');
+      const oobCode = params.get('oobCode');
+      if (mode === 'resetPassword' && oobCode) {
+        setResetPasswordCode(oobCode);
+      }
+    }
+  }, []);
+
+  const handleDoneReset = () => {
+    setResetPasswordCode(null);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('mode');
+      url.searchParams.delete('oobCode');
+      url.searchParams.delete('apiKey');
+      window.history.replaceState({}, document.title, url.pathname);
+    }
+  };
+
   useEffect(() => {
     void initializeSlearnAppCheck();
   }, []);
@@ -6367,6 +6811,13 @@ export default function Home() {
         <LoaderCircle />
         <p>Preparing SLearn…</p>
       </div>
+    );
+  if (resetPasswordCode)
+    return (
+      <ResetPasswordPage
+        oobCode={resetPasswordCode}
+        onDone={handleDoneReset}
+      />
     );
   if (!user || !role)
     return (

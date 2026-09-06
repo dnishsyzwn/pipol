@@ -184,7 +184,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const resetPassword = async (email: string) => {
     setAuthError(null);
     try {
-      await sendPasswordResetEmail(auth, email);
+      const actionCodeSettings = typeof window !== 'undefined' ? {
+        url: `${window.location.origin}/?mode=resetPassword`,
+        handleCodeInApp: true,
+      } : undefined;
+      await sendPasswordResetEmail(auth, email, actionCodeSettings);
     } catch (err: any) {
       const msg = formatAuthError(err);
       setAuthError(msg);
