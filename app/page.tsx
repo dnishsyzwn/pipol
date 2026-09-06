@@ -48,6 +48,7 @@ import {
   ChevronRight,
   Clock3,
   Copy,
+  Download,
   FileUp,
   FileQuestion,
   GraduationCap,
@@ -1388,7 +1389,18 @@ function AppShell({
   const [profilePreview, setProfilePreview] = useState(user.photoURL || '');
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState('');
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
+  const [isInstalledApp, setIsInstalledApp] = useState(false);
   const profileQuota = useAiQuota(user, role === 'teacher');
+  useEffect(() => {
+    setIsInstalledApp(window.matchMedia('(display-mode: standalone)').matches);
+    const captureInstall = (event: Event) => { event.preventDefault(); setInstallPrompt(event); };
+    const installed = () => { setInstallPrompt(null); setIsInstalledApp(true); };
+    window.addEventListener('beforeinstallprompt', captureInstall);
+    window.addEventListener('appinstalled', installed);
+    return () => { window.removeEventListener('beforeinstallprompt', captureInstall); window.removeEventListener('appinstalled', installed); };
+  }, []);
+  const installApp = async () => { if (!installPrompt) return; await installPrompt.prompt(); await installPrompt.userChoice; setInstallPrompt(null); };
   useEffect(() => { if (!profileFile) { setProfilePreview(profilePhoto); return; } const url = URL.createObjectURL(profileFile); setProfilePreview(url); return () => URL.revokeObjectURL(url); }, [profileFile, profilePhoto]);
   const go = (target: NavTarget) => {
     if (onNavigate) {
@@ -1433,6 +1445,7 @@ function AppShell({
           </button>
         </nav>
         <div className="sidebar-foot">
+          {!isInstalledApp && installPrompt && <button type="button" onClick={installApp} aria-label="Install SLearn desktop app" title="Install SLearn desktop app" style={{ color: '#173e30' }}><Download /><span>Install app</span></button>}
           <button type="button" className="mini-profile profile-trigger" onClick={openProfile} aria-label="Edit profile" title="Edit profile">
             {avatar()}
             <div>
