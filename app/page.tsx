@@ -395,6 +395,15 @@ async function cacheOfflineExercise(classroomId: string, exercise: unknown) {
   await new Promise<void>((resolve, reject) => { const tx = db.transaction('exercises', 'readwrite'); tx.objectStore('exercises').put({ key: `${classroomId}:${(exercise as { id: string }).id}`, classroomId, exercise }); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); });
   db.close();
 }
+async function readOfflineExercises(classroomId: string): Promise<any[]> {
+  if (typeof indexedDB === 'undefined') return [];
+  const database = await openOfflineDb();
+  return await new Promise<any[]>((resolve, reject) => {
+    const request = database.transaction('exercises', 'readonly').objectStore('exercises').getAll();
+    request.onsuccess = () => { database.close(); resolve((request.result || []).filter((item: any) => item.classroomId === classroomId).map((item: any) => item.exercise)); };
+    request.onerror = () => { database.close(); reject(request.error); };
+  });
+}
 export function useOfflineExercisePack(user: User | null, role: Role | null) {
   useEffect(() => {
     if (!user || role !== 'student' || typeof window === 'undefined') return;
@@ -412,11 +421,14 @@ export function useOfflineExercisePack(user: User | null, role: Role | null) {
     const syncQueuedSubmissions = async () => {
       if (!navigator.onLine) return;
       const key = `slearn:offline-submissions:${user.uid}`;
-      const queued = JSON.parse(window.localStorage.getItem(key) || '[]') as Array<{ classroomId: string; exerciseId: string; answers: Record<number, string> }>;
+      const queued = JSON.parse(window.localStorage.getItem(key) || '[]') as Array<any>;
       if (!queued.length) return;
       const remaining = [];
       for (const item of queued) {
-        try { await httpsCallable(functions, 'submitPersonalizedExercise')(item); } catch { remaining.push(item); }
+        try {
+          if (item.personalized) await httpsCallable(functions, 'submitPersonalizedExercise')(item);
+          else await setDoc(doc(db, 'classrooms', item.classroomId, 'exercises', item.exerciseId, 'submissions', user.uid), item.submission);
+        } catch { remaining.push(item); }
       }
       if (remaining.length) window.localStorage.setItem(key, JSON.stringify(remaining));
       else window.localStorage.removeItem(key);
@@ -425,8 +437,9 @@ export function useOfflineExercisePack(user: User | null, role: Role | null) {
     void syncQueuedSubmissions();
     const handleOnline = () => { void cachePack(); void syncQueuedSubmissions(); };
     window.addEventListener('online', handleOnline);
+    const retryTimer = window.setInterval(() => { if (navigator.onLine) void syncQueuedSubmissions(); }, 15_000);
     void navigator.serviceWorker?.register('/sw.js').catch(() => undefined);
-    return () => window.removeEventListener('online', handleOnline);
+    return () => { window.removeEventListener('online', handleOnline); window.clearInterval(retryTimer); };
   }, [user, role]);
 }
 
@@ -2937,13 +2950,13 @@ function Classroom({
       }),
     [classroom.id],
   );
-  useEffect(
-    () =>
-      onSnapshot(collection(db, 'classrooms', classroom.id, 'exercises'), (s) =>
-        setExercises(s.docs.map((d) => ({ id: d.id, ...d.data() }) as any)),
-      ),
-    [classroom.id],
-  );
+  useEffect(() => {
+    void readOfflineExercises(classroom.id).then((cached) => { if (cached.length && !navigator.onLine) setExercises(cached); }).catch(() => undefined);
+    return onSnapshot(collection(db, 'classrooms', classroom.id, 'exercises'), (s) =>
+      setExercises(s.docs.map((d) => ({ id: d.id, ...d.data() }) as any)),
+      async () => { const cached = await readOfflineExercises(classroom.id).catch(() => []); if (cached.length) setExercises(cached); },
+    );
+  }, [classroom.id]);
   useEffect(
     () =>
       onSnapshot(collection(db, 'classrooms', classroom.id, 'members'), (s) =>
@@ -6122,7 +6135,7 @@ function StudentExerciseRunnerContent({
       if (exercise.personalized && typeof navigator !== 'undefined' && !navigator.onLine) {
         const queueKey = `slearn:offline-submissions:${user.uid}`;
         const queued = JSON.parse(window.localStorage.getItem(queueKey) || '[]') as unknown[];
-        queued.push({ classroomId: classroom.id, exerciseId: exercise.id, answers });
+        queued.push({ personalized: true, classroomId: classroom.id, exerciseId: exercise.id, answers });
         window.localStorage.setItem(queueKey, JSON.stringify(queued));
         setMyQuestionResults(questionResults);
         setSubmitError('Saved offline. Your result will be sent automatically when connection returns.');
@@ -6133,6 +6146,13 @@ function StudentExerciseRunnerContent({
         setTotalCorrectState(result.totalCorrect);
         setTotalWrongState(result.totalWrong);
         setMyQuestionResults(result.questionResults);
+      } else if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        const queueKey = `slearn:offline-submissions:${user.uid}`;
+        const queued = JSON.parse(window.localStorage.getItem(queueKey) || '[]') as unknown[];
+        queued.push({ personalized: false, classroomId: classroom.id, exerciseId: exercise.id, submission: { studentId: user.uid, studentName: user.displayName || 'Student', studentEmail: user.email || '', answers, score, totalPoints, totalCorrect: correctCount, totalWrong: wrongCount, questionResults, isLate, isExam, autoSubmitted: isAutoSubmit, submittedAt: new Date() } });
+        window.localStorage.setItem(queueKey, JSON.stringify(queued));
+        setMyQuestionResults(questionResults);
+        setSubmitError('Waiting to sync. Your answers are saved on this device.');
       } else await setDoc(
         doc(
           db,
