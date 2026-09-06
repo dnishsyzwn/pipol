@@ -22,6 +22,11 @@ export type QuizQuestion = {
   explanation: string;
   hints: string[];
   difficulty: Difficulty;
+  topic: string;
+  subtopic?: string;
+  skills: string[];
+  tagIds: string[];
+  taggingConfidence: 'high' | 'medium' | 'low';
   learningObjective?: string;
   sourceReference?: SourceReference;
   confidence: 'high' | 'medium' | 'low';

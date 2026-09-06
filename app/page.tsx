@@ -133,6 +133,11 @@ type QuestionItem = {
   points: number;
   enhanced: boolean;
   difficulty?: Difficulty;
+  topic?: string;
+  subtopic?: string;
+  skills?: string[];
+  tagIds?: string[];
+  taggingConfidence?: 'high' | 'medium' | 'low';
   loading?: boolean;
 };
 type QuestionResult = {
@@ -144,6 +149,9 @@ type QuestionResult = {
   pointsEarned: number;
   pointsPossible: number;
   difficulty: Difficulty;
+  topic: string;
+  subtopic?: string;
+  skills: string[];
 };
 type SubmissionData = {
   id: string;
@@ -180,8 +188,11 @@ type ExerciseAnalytics = {
     totalAnswers: number;
     accuracyRate: number;
   }[];
+  topicBreakdown: TagPerformance[];
+  skillBreakdown: TagPerformance[];
   submissions: SubmissionData[];
 };
+type TagPerformance = { label: string; correctCount: number; totalAnswers: number; unansweredCount: number; accuracyRate: number; status: 'strong' | 'on_track' | 'developing' | 'needs_support' | 'not_enough_data' };
 type AuthParams = {
   provider: 'google' | 'email';
   mode: 'login' | 'signup';
@@ -194,6 +205,23 @@ const MAX_TEACHER_CLASSES = 3;
 const difficultyOrder: Difficulty[] = ['easy', 'medium', 'hard'];
 const difficultyColour = (difficulty: Difficulty) =>
   difficulty === 'easy' ? '#edf7df' : difficulty === 'hard' ? '#ffe1dc' : '#fff0d4';
+
+const cleanTag = (value?: string) => (value || '').trim().replace(/\s+/g, ' ');
+const tagId = (kind: string, value: string) => `${kind}-${cleanTag(value).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || 'general'}`;
+function summarizeTagPerformance(results: QuestionResult[], dimension: 'topic' | 'skill'): TagPerformance[] {
+  const groups = new Map<string, QuestionResult[]>();
+  results.forEach((result) => {
+    const labels = dimension === 'topic' ? [cleanTag(result.topic) || 'General'] : (result.skills?.length ? result.skills : ['General skill']);
+    labels.forEach((label) => groups.set(label, [...(groups.get(label) || []), result]));
+  });
+  return [...groups.entries()].map(([label, matching]) => {
+    const correctCount = matching.filter((result) => result.isCorrect).length;
+    const unansweredCount = matching.filter((result) => !result.studentAnswer.trim()).length;
+    const accuracyRate = matching.length ? Math.round((correctCount / matching.length) * 100) : 0;
+    const status: TagPerformance['status'] = matching.length < 3 ? 'not_enough_data' : accuracyRate >= 80 ? 'strong' : accuracyRate >= 65 ? 'on_track' : accuracyRate >= 40 ? 'developing' : 'needs_support';
+    return { label, correctCount, totalAnswers: matching.length, unansweredCount, accuracyRate, status };
+  }).sort((a, b) => a.accuracyRate - b.accuracyRate || b.totalAnswers - a.totalAnswers);
+}
 
 function summarizeDifficulty(results: QuestionResult[]) {
   return difficultyOrder.map((difficulty) => {
@@ -323,6 +351,15 @@ function useOnlineStatus(): boolean {
   return isOnline;
 }
 
+function useApprovedSubjects(stage: SchoolStage, year: string) {
+  const [subjects, setSubjects] = useState<string[]>([]);
+  useEffect(() => onSnapshot(collection(db, 'subjectCatalog'), (snapshot) => {
+    setSubjects(snapshot.docs.map((item) => item.data()).filter((item) => item.schoolStage === stage && (item.schoolYear === year || item.schoolYear === 'all')).map((item) => String(item.label || '')).filter(Boolean));
+  }), [stage, year]);
+  return subjects;
+}
+
+const OTHER_SUBJECT = 'Others — request a new subject';
 function quotaCountdown(date: Date | null) {
   if (!date) return 'Reset schedule unavailable';
   const remaining = Math.max(0, date.getTime() - Date.now());
@@ -381,6 +418,9 @@ function computeSubmissionStats(
     const normalizedResults = sub.questionResults.map((result: QuestionResult, index: number) => ({
       ...result,
       difficulty: result.difficulty || qList[result.questionIdx ?? index]?.difficulty || 'medium',
+      topic: result.topic || qList[result.questionIdx ?? index]?.topic || 'General',
+      subtopic: result.subtopic || qList[result.questionIdx ?? index]?.subtopic || '',
+      skills: result.skills?.length ? result.skills : qList[result.questionIdx ?? index]?.skills || [],
     }));
     const c = normalizedResults.filter(
       (r: QuestionResult) => r.isCorrect,
@@ -432,6 +472,9 @@ function computeSubmissionStats(
             : 0,
         pointsPossible: pts,
         difficulty: q.difficulty || 'medium',
+        topic: q.topic || 'General',
+        subtopic: q.subtopic || '',
+        skills: Array.isArray(q.skills) ? q.skills : [],
       };
     });
 
@@ -1009,6 +1052,9 @@ function TeacherDashboard({
     [schoolStage, setSchoolStage] = useState<SchoolStage>('primary'),
     [schoolYear, setSchoolYear] = useState('Tahun 1'),
     [newSubject, setNewSubject] = useState(''),
+    [customSubject, setCustomSubject] = useState(''),
+    [subjectRequestMessage, setSubjectRequestMessage] = useState(''),
+    [requestingSubject, setRequestingSubject] = useState(false),
     [newMaxStudents, setNewMaxStudents] = useState('30'),
     [saving, setSaving] = useState(false),
     [created, setCreated] = useState<ClassroomData | null>(null),
@@ -1024,10 +1070,23 @@ function TeacherDashboard({
   const [deleteTarget, setDeleteTarget] = useState<ClassroomData | null>(null),
     [deleting, setDeleting] = useState(false),
     [deleteError, setDeleteError] = useState('');
-  const availableSubjects = subjectsFor(schoolStage, schoolYear);
+  const approvedSubjects = useApprovedSubjects(schoolStage, schoolYear);
+  const approvedEditSubjects = useApprovedSubjects(editSchoolStage, editSchoolYear);
+  const availableSubjects = [...subjectsFor(schoolStage, schoolYear), ...approvedSubjects.map((name) => ({ name, category: 'Admin-approved subjects' }))];
   const subjectGroups = [...new Set(availableSubjects.map((subject) => subject.category))];
-  const editAvailableSubjects = subjectsFor(editSchoolStage, editSchoolYear);
+  const editAvailableSubjects = [...subjectsFor(editSchoolStage, editSchoolYear), ...approvedEditSubjects.map((name) => ({ name, category: 'Admin-approved subjects' }))];
   const editSubjectGroups = [...new Set(editAvailableSubjects.map((subject) => subject.category))];
+  const requestCustomSubject = async () => {
+    const label = cleanTag(customSubject);
+    if (label.length < 2) return setSubjectRequestMessage('Enter a valid subject name.');
+    setRequestingSubject(true);
+    try {
+      const id = `${user.uid}-${schoolStage}-${schoolYear}-${tagId('subject', label)}`;
+      await setDoc(doc(db, 'subjectProposals', id), { label, normalizedLabel: label.toLowerCase(), schoolStage, schoolYear, requesterId: user.uid, requesterName: user.displayName || 'Teacher', requesterEmail: user.email || '', status: 'pending', createdAt: serverTimestamp() });
+      setSubjectRequestMessage('Submitted for admin approval. It will appear in the subject list after approval.');
+      setCustomSubject('');
+    } catch (error) { setSubjectRequestMessage(friendlyError(error)); } finally { setRequestingSubject(false); }
+  };
 
   useEffect(
     () =>
@@ -1056,7 +1115,7 @@ function TeacherDashboard({
   }, [classes.map((c) => c.id).join('|')]);
 
   const createClass = async () => {
-    if (!newName.trim() || !newSubject) return;
+    if (!newName.trim() || !newSubject || newSubject === OTHER_SUBJECT) return;
     if (classes.length >= MAX_TEACHER_CLASSES) {
       setError(
         `Teachers can only create a maximum of ${MAX_TEACHER_CLASSES} classrooms.`,
@@ -1516,7 +1575,7 @@ function TeacherDashboard({
                 <Combobox
                   value={newSubject || null}
                   onValueChange={(value) => setNewSubject(String(value || ''))}
-                  items={availableSubjects.map((subject) => subject.name)}
+                  items={[...availableSubjects.map((subject) => subject.name), OTHER_SUBJECT]}
                 >
                   <ComboboxInput
                     className="curriculum-combobox"
@@ -1538,6 +1597,10 @@ function TeacherDashboard({
                             ))}
                         </ComboboxGroup>
                       ))}
+                      <ComboboxGroup>
+                        <ComboboxLabel>Can’t find your subject?</ComboboxLabel>
+                        <ComboboxItem value={OTHER_SUBJECT}>{OTHER_SUBJECT}</ComboboxItem>
+                      </ComboboxGroup>
                     </ComboboxList>
                   </ComboboxContent>
                 </Combobox>
@@ -1545,6 +1608,18 @@ function TeacherDashboard({
                   {curriculumFor(schoolStage)} · {availableSubjects.length} subjects listed for {schoolYear}
                 </small>
               </label>
+              {newSubject === OTHER_SUBJECT && (
+                <div className="custom-subject-request">
+                  <label className="form-label">
+                    New subject name
+                    <Input value={customSubject} onChange={(e) => { setCustomSubject(e.target.value); setSubjectRequestMessage(''); }} placeholder="Enter the official subject name" maxLength={100} />
+                  </label>
+                  <Button type="button" variant="outline" onClick={requestCustomSubject} disabled={requestingSubject || customSubject.trim().length < 2}>
+                    {requestingSubject ? <LoaderCircle /> : <Send />} Submit for admin approval
+                  </Button>
+                  {subjectRequestMessage && <p className="curriculum-note">{subjectRequestMessage}</p>}
+                </div>
+              )}
               <label className="form-label">
                 Student capacity (Max learners)
                 <Input
@@ -1573,6 +1648,7 @@ function TeacherDashboard({
                     saving ||
                     !newName.trim() ||
                     !newSubject ||
+                    newSubject === OTHER_SUBJECT ||
                     classes.length >= MAX_TEACHER_CLASSES
                   }
                 >
@@ -2087,6 +2163,7 @@ function Classroom({
   classroom,
   onBack,
   onQuiz,
+  onEditExercise,
   onStartExercise,
   onExit,
   onClassUpdated,
@@ -2097,6 +2174,7 @@ function Classroom({
   classroom: ClassroomData;
   onBack: () => void;
   onQuiz: () => void;
+  onEditExercise?: (ex: any) => void;
   onStartExercise: (ex: any) => void;
   onExit: () => void;
   onClassUpdated?: (c: ClassroomData) => void;
@@ -2129,7 +2207,8 @@ function Classroom({
   const [deleteOpen, setDeleteOpen] = useState(false),
     [deleting, setDeleting] = useState(false),
     [deleteError, setDeleteError] = useState('');
-  const editAvailableSubjects = subjectsFor(editSchoolStage, editSchoolYear);
+  const approvedEditSubjects = useApprovedSubjects(editSchoolStage, editSchoolYear);
+  const editAvailableSubjects = [...subjectsFor(editSchoolStage, editSchoolYear), ...approvedEditSubjects.map((name) => ({ name, category: 'Admin-approved subjects' }))];
   const editSubjectGroups = [...new Set(editAvailableSubjects.map((subject) => subject.category))];
 
   useEffect(
@@ -2347,6 +2426,8 @@ function Classroom({
           computeSubmissionStats(submission, ex).questionResults,
         );
         const difficultyBreakdown = summarizeDifficulty(allQuestionResults);
+        const topicBreakdown = summarizeTagPerformance(allQuestionResults, 'topic');
+        const skillBreakdown = summarizeTagPerformance(allQuestionResults, 'skill');
 
         subs.forEach((s) => {
           const stats = computeSubmissionStats(s, ex);
@@ -2367,6 +2448,8 @@ function Classroom({
             accuracyRate,
             questionBreakdown: qStats,
             difficultyBreakdown,
+            topicBreakdown,
+            skillBreakdown,
             submissions: subs,
           },
         }));
@@ -2644,7 +2727,8 @@ function Classroom({
                               title="Edit exercise"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                openEditExercise(ex);
+                                if (onEditExercise) onEditExercise(ex);
+                                else openEditExercise(ex);
                               }}
                               aria-label={`Edit ${ex.title}`}
                               style={{ width: 26, height: 26 }}
@@ -3205,6 +3289,8 @@ function Classroom({
                 accuracyRate: 0,
                 questionBreakdown: [],
                 difficultyBreakdown: [],
+                topicBreakdown: [],
+                skillBreakdown: [],
                 submissions: [],
               };
               return (
@@ -3243,6 +3329,14 @@ function Classroom({
                         {stats.totalWrong}
                       </strong>
                     </div>
+                  </div>
+                  <div style={{ marginBottom: '1.5rem' }}>
+                    <h3 style={{ fontSize: '1.05rem', fontWeight: 600, marginBottom: '.75rem' }}>Topics that need attention</h3>
+                    {stats.topicBreakdown.length ? <div className="tag-performance-grid">{stats.topicBreakdown.map((item) => <div className="tag-performance-card" key={item.label}><header><b>{item.label}</b><strong className={item.status}>{item.totalAnswers ? `${item.accuracyRate}%` : '—'}</strong></header><small>{item.correctCount}/{item.totalAnswers} correct · {item.unansweredCount} unanswered</small><small>{item.status === 'needs_support' ? 'Needs support' : item.status === 'not_enough_data' ? 'Not enough data' : item.status.replace('_', ' ')}</small></div>)}</div> : <p style={{ color: '#777', fontSize: '.85rem' }}>Topic results will appear after tagged questions are answered.</p>}
+                  </div>
+                  <div style={{ marginBottom: '1.5rem' }}>
+                    <h3 style={{ fontSize: '1.05rem', fontWeight: 600, marginBottom: '.75rem' }}>Performance by skill</h3>
+                    {stats.skillBreakdown.length ? <div className="tag-performance-grid">{stats.skillBreakdown.map((item) => <div className="tag-performance-card" key={item.label}><header><b>{item.label}</b><strong className={item.status}>{item.totalAnswers ? `${item.accuracyRate}%` : '—'}</strong></header><small>{item.correctCount}/{item.totalAnswers} correct · {item.unansweredCount} unanswered</small></div>)}</div> : <p style={{ color: '#777', fontSize: '.85rem' }}>Skill results will appear after tagged questions are answered.</p>}
                   </div>
                   <div style={{ marginBottom: '1.5rem' }}>
                     <h3 style={{ fontSize: '1.05rem', fontWeight: 600, marginBottom: '.75rem' }}>Performance by Difficulty</h3>
@@ -3824,6 +3918,20 @@ function Classroom({
           )}
           {editExError && <p className="form-error">{editExError}</p>}
           <DialogFooter style={{ marginTop: 14 }}>
+            {onEditExercise && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  const target = editExTarget;
+                  setEditExTarget(null);
+                  onEditExercise(target);
+                }}
+                style={{ gap: '0.35rem', marginRight: 'auto' }}
+              >
+                <Pencil style={{ width: 14, height: 14 }} /> Edit in Builder
+              </Button>
+            )}
             <Button variant="outline" onClick={() => setEditExTarget(null)}>
               Cancel
             </Button>
@@ -4147,6 +4255,9 @@ function StudentExerciseRunner({
           pointsEarned: earned,
           pointsPossible: pts,
           difficulty: q.difficulty || 'medium',
+          topic: q.topic || 'General',
+          subtopic: q.subtopic || '',
+          skills: Array.isArray(q.skills) ? q.skills : [],
         });
       });
 
@@ -5310,41 +5421,90 @@ function StudentExerciseRunner({
 function QuizBuilder({
   user,
   classroom,
+  initialExercise,
   onBack,
   onExit,
 }: {
   user: User;
   classroom: ClassroomData;
+  initialExercise?: any | null;
   onBack: () => void;
   onExit: () => void;
 }) {
-  const [title, setTitle] = useState('');
+  const isEditing = Boolean(initialExercise);
+  const [title, setTitle] = useState(initialExercise?.title || '');
   const [titleError, setTitleError] = useState('');
-  const [deadline, setDeadline] = useState('');
-  const [allowLateSubmissions, setAllowLateSubmissions] = useState(true);
-  const [questions, setQuestions] = useState<QuestionItem[]>([
-    {
-      id: '1',
-      question: 'Solve for x: 3x + 5 = 20.',
-      answer: 'x = 5',
-      points: 2,
-      enhanced: false,
-    },
-  ]);
+  const [deadline, setDeadline] = useState(initialExercise?.deadline || '');
+  const [allowLateSubmissions, setAllowLateSubmissions] = useState(
+    initialExercise ? initialExercise.allowLateSubmissions !== false : true,
+  );
+  const [questions, setQuestions] = useState<QuestionItem[]>(() => {
+    if (initialExercise?.questions?.length) {
+      return initialExercise.questions.map((q: any, idx: number) => ({
+        id: q.id || String(idx + 1),
+        question: q.question || '',
+        answer: q.answer || '',
+        points: Number(q.points) || 2,
+        enhanced: Boolean(q.enhanced),
+        difficulty: q.difficulty || 'medium',
+        topic: q.topic || '',
+        subtopic: q.subtopic || '',
+        skills: q.skills || [],
+        tagIds: q.tagIds || [],
+        taggingConfidence: q.taggingConfidence,
+      }));
+    }
+    if (initialExercise?.question) {
+      return [
+        {
+          id: '1',
+          question: initialExercise.question,
+          answer: initialExercise.answer || '',
+          points: 2,
+          enhanced: Boolean(initialExercise.enhanced),
+          difficulty: 'medium',
+          topic: '',
+          subtopic: '',
+          skills: [],
+        },
+      ];
+    }
+    return [
+      {
+        id: '1',
+        question: 'Solve for x: 3x + 5 = 20.',
+        answer: 'x = 5',
+        points: 2,
+        enhanced: false,
+        topic: '',
+        subtopic: '',
+        skills: [],
+      },
+    ];
+  });
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
   const [aiMessage, setAiMessage] = useState('');
   const [aiPrompt, setAiPrompt] = useState('');
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
-  const [questionCount, setQuestionCount] = useState(5);
+  const [questionCount, setQuestionCount] = useState(
+    initialExercise?.questions?.length || 5,
+  );
   const [imageCount, setImageCount] = useState(0);
-  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | 'mixed'>('medium');
+  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | 'mixed'>(
+    initialExercise?.questions?.[0]?.difficulty || 'medium',
+  );
   const [generating, setGenerating] = useState(false);
   const quota = useAiQuota(user);
   const [quickGenerateIndex, setQuickGenerateIndex] = useState<number | null>(null);
   const [quickPrompt, setQuickPrompt] = useState('');
   const [quickGenerating, setQuickGenerating] = useState(false);
   const [quickGenerateError, setQuickGenerateError] = useState('');
+  const [classroomTags, setClassroomTags] = useState<Array<{ id: string; kind: string; label: string }>>([]);
+
+  useEffect(() => onSnapshot(collection(db, 'classrooms', classroom.id, 'tags'), (snapshot) => {
+    setClassroomTags(snapshot.docs.map((item) => ({ id: item.id, kind: String(item.get('kind') || 'topic'), label: String(item.get('label') || '') })).filter((item) => item.label));
+  }), [classroom.id]);
 
   const addSourceFiles = (incoming: File[]) => {
     const supported = /\.(pdf|pptx|docx|md|txt|rtf|odp|odt)$/i;
@@ -5364,6 +5524,9 @@ function QuizBuilder({
         answer: '',
         points: 2,
         enhanced: false,
+        topic: '',
+        subtopic: '',
+        skills: [],
       },
     ]);
   };
@@ -5432,9 +5595,9 @@ function QuizBuilder({
         }, reject);
       });
       const draft = await getDoc(doc(db, 'quizDrafts', String(job.draftId)));
-      const generated = (draft.data()?.questions ?? [])[0] as { question?: string; correctAnswer?: string; difficulty?: 'easy' | 'medium' | 'hard' } | undefined;
+      const generated = (draft.data()?.questions ?? [])[0] as { question?: string; correctAnswer?: string; difficulty?: Difficulty; topic?: string; subtopic?: string; skills?: string[]; tagIds?: string[]; taggingConfidence?: 'high' | 'medium' | 'low' } | undefined;
       if (!generated?.question) throw new Error('No question was generated. Please try again.');
-      setQuestions((current) => current.map((question, index) => index === quickGenerateIndex ? { ...question, question: generated.question || '', answer: generated.correctAnswer || '', difficulty: generated.difficulty, enhanced: true } : question));
+      setQuestions((current) => current.map((question, index) => index === quickGenerateIndex ? { ...question, question: generated.question || '', answer: generated.correctAnswer || '', difficulty: generated.difficulty, topic: generated.topic || '', subtopic: generated.subtopic || '', skills: generated.skills || [], tagIds: generated.tagIds || [], taggingConfidence: generated.taggingConfidence, enhanced: true } : question));
       setQuickGenerateIndex(null);
       setQuickPrompt('');
     } catch (error) {
@@ -5491,8 +5654,8 @@ function QuizBuilder({
         }, reject);
       });
       const draft = await getDoc(doc(db, 'quizDrafts', String(job.draftId)));
-      const generated = (draft.data()?.questions ?? []) as Array<{ id?: string; question: string; correctAnswer: string; difficulty?: 'easy' | 'medium' | 'hard' }>;
-      setQuestions(generated.map((question, index) => ({ id: question.id || `ai-${index}`, question: question.question, answer: question.correctAnswer, points: 2, enhanced: true, difficulty: question.difficulty })));
+      const generated = (draft.data()?.questions ?? []) as Array<{ id?: string; question: string; correctAnswer: string; difficulty?: Difficulty; topic?: string; subtopic?: string; skills?: string[]; tagIds?: string[]; taggingConfidence?: 'high' | 'medium' | 'low' }>;
+      setQuestions(generated.map((question, index) => ({ id: question.id || `ai-${index}`, question: question.question, answer: question.correctAnswer, points: 2, enhanced: true, difficulty: question.difficulty, topic: question.topic || '', subtopic: question.subtopic || '', skills: question.skills || [], tagIds: question.tagIds || [], taggingConfidence: question.taggingConfidence })));
       if (!title.trim() && draft.data()?.title) setTitle(String(draft.data()?.title));
       const inferredLevel = String(draft.data()?.level || 'General education');
       toast.close(loadingToastId);
@@ -5518,28 +5681,82 @@ function QuizBuilder({
 
   const publish = async () => {
     if (!title.trim()) {
-      setTitleError('Please enter an exercise name before publishing.');
+      setTitleError('Please enter an exercise name before saving.');
       return;
     }
     if (!questions.some((q) => q.question.trim())) return;
     setPublishing(true);
     try {
-      await addDoc(collection(db, 'classrooms', classroom.id, 'exercises'), {
-        title: title.trim(),
-        deadline: deadline.trim() || null,
-        allowLateSubmissions: deadline.trim() ? allowLateSubmissions : true,
-        questions: questions.map((q) => ({
-          question: q.question.trim(),
-          answer: q.answer.trim(),
-          points: q.points,
-          enhanced: q.enhanced,
-          difficulty: q.difficulty || 'medium',
-        })),
-        questionCount: questions.length,
-        enhanced: hasEnhancedAny,
-        teacherId: user.uid,
-        createdAt: serverTimestamp(),
-      });
+      const questionPayload = questions.map((q) => ({
+        question: q.question.trim(),
+        answer: q.answer.trim(),
+        points: q.points,
+        enhanced: q.enhanced,
+        difficulty: q.difficulty || 'medium',
+        topic: cleanTag(q.topic) || 'General',
+        subtopic: cleanTag(q.subtopic),
+        skills: (q.skills || []).map(cleanTag).filter(Boolean).slice(0, 5),
+        tagIds: [
+          tagId('topic', cleanTag(q.topic) || 'General'),
+          ...(q.subtopic ? [tagId('subtopic', q.subtopic)] : []),
+          ...(q.skills || []).map((skill) => tagId('skill', skill)),
+        ],
+        taggingConfidence:
+          q.taggingConfidence || (q.enhanced ? 'medium' : 'high'),
+      }));
+
+      if (isEditing && initialExercise?.id) {
+        await updateDoc(
+          doc(db, 'classrooms', classroom.id, 'exercises', initialExercise.id),
+          {
+            title: title.trim(),
+            deadline: deadline.trim() || null,
+            allowLateSubmissions: deadline.trim() ? allowLateSubmissions : true,
+            questions: questionPayload,
+            questionCount: questions.length,
+            enhanced: hasEnhancedAny,
+            updatedAt: serverTimestamp(),
+          },
+        );
+      } else {
+        await addDoc(collection(db, 'classrooms', classroom.id, 'exercises'), {
+          title: title.trim(),
+          deadline: deadline.trim() || null,
+          allowLateSubmissions: deadline.trim() ? allowLateSubmissions : true,
+          questions: questionPayload,
+          questionCount: questions.length,
+          enhanced: hasEnhancedAny,
+          teacherId: user.uid,
+          createdAt: serverTimestamp(),
+        });
+      }
+      const approvedTags = questions.flatMap((question) => [
+        { kind: 'topic', label: cleanTag(question.topic) || 'General' },
+        ...(cleanTag(question.subtopic)
+          ? [{ kind: 'subtopic', label: cleanTag(question.subtopic) }]
+          : []),
+        ...(question.skills || [])
+          .map((skill) => ({ kind: 'skill', label: cleanTag(skill) }))
+          .filter((tag) => tag.label),
+      ]);
+      await Promise.all(
+        [
+          ...new Map(
+            approvedTags.map((tag) => [tagId(tag.kind, tag.label), tag]),
+          ).entries(),
+        ].map(([id, tag]) =>
+          setDoc(
+            doc(db, 'classrooms', classroom.id, 'tags', id),
+            {
+              ...tag,
+              status: 'approved',
+              updatedAt: serverTimestamp(),
+              createdBy: user.uid,
+            },
+            { merge: true },
+          ),
+        ),
+      );
       setPublished(true);
       setTimeout(() => onBack(), 800);
     } catch (e) {
@@ -5562,7 +5779,11 @@ function QuizBuilder({
           <ArrowLeft /> {classroom.name}
         </button>
         <div>
-          <span className="draft-dot" /> {published ? 'Published' : 'Draft'} ·{' '}
+          <span
+            className="draft-dot"
+            style={isEditing ? { background: '#15803d' } : undefined}
+          />{' '}
+          {isEditing ? 'Editing' : published ? 'Published' : 'Draft'} ·{' '}
           {title.trim() ? <b>{title.trim()}</b> : <em>Untitled Exercise</em>} (
           {questions.length} Question{questions.length > 1 ? 's' : ''})
         </div>
@@ -5571,8 +5792,22 @@ function QuizBuilder({
           disabled={published || publishing || !isValid}
           className="primary-action"
         >
-          {publishing ? <LoaderCircle /> : published ? <Check /> : <Send />}{' '}
-          {published ? 'Published' : `Publish (${questions.length})`}
+          {publishing ? (
+            <LoaderCircle />
+          ) : published ? (
+            <Check />
+          ) : isEditing ? (
+            <Check />
+          ) : (
+            <Send />
+          )}{' '}
+          {published
+            ? isEditing
+              ? 'Saved'
+              : 'Published'
+            : isEditing
+              ? `Save changes (${questions.length})`
+              : `Publish (${questions.length})`}
         </Button>
       </div>
       <div
@@ -5847,6 +6082,15 @@ function QuizBuilder({
                     }
                   />
                 </label>
+              </div>
+              <div className="question-tag-editor">
+                <div className="question-tag-head"><div><b>Learning tags</b><small>Use a specific chapter or concept so performance reports stay useful.</small></div>{q.taggingConfidence && <span>{q.taggingConfidence} AI confidence</span>}</div>
+                <div className="question-tag-grid">
+                  <label className="form-label">Difficulty<select value={q.difficulty || 'medium'} onChange={(event) => updateQuestion(idx, 'difficulty', event.target.value)}><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select></label>
+                  <label className="form-label">Topic<Input list={`topics-${q.id}`} value={q.topic || ''} onChange={(event) => updateQuestion(idx, 'topic', event.target.value)} placeholder="e.g. Quadratic equations"/><datalist id={`topics-${q.id}`}>{classroomTags.filter((tag) => tag.kind === 'topic').map((tag) => <option key={tag.id} value={tag.label}/>)}</datalist></label>
+                  <label className="form-label">Subtopic<Input list={`subtopics-${q.id}`} value={q.subtopic || ''} onChange={(event) => updateQuestion(idx, 'subtopic', event.target.value)} placeholder="e.g. Factorisation method"/><datalist id={`subtopics-${q.id}`}>{classroomTags.filter((tag) => tag.kind === 'subtopic').map((tag) => <option key={tag.id} value={tag.label}/>)}</datalist></label>
+                  <label className="form-label">Skills<Input value={(q.skills || []).join(', ')} onChange={(event) => updateQuestion(idx, 'skills', event.target.value.split(',').map(cleanTag).filter(Boolean).slice(0, 5))} placeholder="Calculate, Apply"/></label>
+                </div>
               </div>
               <div className="ai-question-bar">
                 <div className="ai-question-label">
@@ -6168,7 +6412,14 @@ export default function Home() {
         user={user}
         classroom={selectedClass}
         onBack={() => setView('classes')}
-        onQuiz={() => setView('quiz')}
+        onQuiz={() => {
+          setSelectedExercise(null);
+          setView('quiz');
+        }}
+        onEditExercise={(ex) => {
+          setSelectedExercise(ex);
+          setView('quiz');
+        }}
         onStartExercise={(ex) => {
           setSelectedExercise(ex);
           setView('exercise');
@@ -6186,7 +6437,11 @@ export default function Home() {
       <QuizBuilder
         user={user}
         classroom={selectedClass}
-        onBack={() => setView('classroom')}
+        initialExercise={selectedExercise}
+        onBack={() => {
+          setSelectedExercise(null);
+          setView('classroom');
+        }}
         onExit={logout}
       />
     );
