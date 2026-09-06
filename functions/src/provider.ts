@@ -17,6 +17,7 @@ type GenerationInput = {
   questionTypes: string[];
   learningObjectives: string[];
   imageMode: ImageMode;
+  existingTags: Array<{ id: string; kind: string; label: string }>;
 };
 
 function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -91,6 +92,8 @@ function promptForQuiz(input: GenerationInput): string {
         : `Every question should use ${input.difficulty} difficulty unless correctness requires a safer interpretation.`,
       'Sensitive educational topics may be handled neutrally and factually, but never create sexualized, pornographic, exploitative, or graphic content.',
       'Every question should include a sourceReference when the material supports it.',
+      'Tag every question with one primary topic, an optional subtopic, and one or more assessed skills.',
+      'Reuse the supplied classroom tag labels and IDs whenever they fit. Only suggest a clear new tag when no existing tag is suitable.',
     ].join(' '),
     task: 'Create a quiz draft from this teacher request and source material.',
     teacherRequest: input.prompt,
@@ -103,6 +106,7 @@ function promptForQuiz(input: GenerationInput): string {
       questionTypes: input.questionTypes,
       learningObjectives: input.learningObjectives,
       imageMode: input.imageMode,
+      existingClassroomTags: input.existingTags,
     },
     sourceSummary: input.sourceSummary,
     sourceMaterial: sanitizeSourceText(input.sourceText),
@@ -120,6 +124,11 @@ function promptForQuiz(input: GenerationInput): string {
         explanation: 'string',
         hints: ['string'],
         difficulty: 'easy | medium | hard',
+        topic: 'primary curriculum topic or chapter',
+        subtopic: 'specific concept or skill area',
+        skills: ['Calculate | Explain | Compare | Apply | Analyse | Recall or another concise skill'],
+        tagIds: ['reuse matching existing classroom tag IDs; otherwise empty'],
+        taggingConfidence: 'high | medium | low',
         learningObjective: 'string',
         sourceReference: { materialId: 'known material id', fileName: 'string', page: 1, slide: 1, sectionTitle: 'string' },
         confidence: 'high | medium | low',
@@ -144,6 +153,10 @@ export async function generateQuiz(input: GenerationInput) {
         explanation: 'Dry-run output; configure Vertex AI credentials before using this in production.',
         hints: [],
         difficulty: input.difficulty === 'mixed' ? (['easy', 'hard', 'medium'][index % 3] as 'easy' | 'medium' | 'hard') : input.difficulty,
+        topic: input.existingTags.find((tag) => tag.kind === 'topic')?.label || 'General',
+        skills: ['Explain'],
+        tagIds: [],
+        taggingConfidence: 'low',
         confidence: 'low',
         needsReview: true,
       })),
