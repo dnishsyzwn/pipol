@@ -5,6 +5,7 @@ import Link from 'next/link';
 import {
   BarChart3,
   BookOpen,
+  Check,
   ChevronRight,
   CircleAlert,
   Eye,
@@ -29,11 +30,11 @@ import {
   signOut,
   type User,
 } from 'firebase/auth';
-import { collection, doc, getDoc, onSnapshot, type Timestamp } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc, type Timestamp } from 'firebase/firestore';
 import { auth, db, googleProvider } from '@/lib/firebase';
 import './admin.css';
 
-type AdminTab = 'overview' | 'users' | 'classrooms' | 'reports';
+type AdminTab = 'overview' | 'users' | 'classrooms' | 'subjects' | 'reports';
 type UserRow = {
   id: string;
   displayName?: string;
@@ -54,11 +55,24 @@ type ClassroomRow = {
   progress?: number;
   createdAt?: Timestamp;
 };
+type SubjectProposal = {
+  id: string;
+  label: string;
+  normalizedLabel?: string;
+  schoolStage: string;
+  schoolYear: string;
+  requesterId: string;
+  requesterName?: string;
+  requesterEmail?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt?: Timestamp;
+};
 
 const nav: { id: AdminTab; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'users', label: 'Users', icon: Users },
   { id: 'classrooms', label: 'Classrooms', icon: BookOpen },
+  { id: 'subjects', label: 'Subject approvals', icon: CircleAlert },
   { id: 'reports', label: 'Reports', icon: BarChart3 },
 ];
 
@@ -196,6 +210,8 @@ export default function AdminPage() {
   const [tab, setTab] = useState<AdminTab>('overview');
   const [users, setUsers] = useState<UserRow[]>([]);
   const [classrooms, setClassrooms] = useState<ClassroomRow[]>([]);
+  const [subjectProposals, setSubjectProposals] = useState<SubjectProposal[]>([]);
+  const [reviewingSubject, setReviewingSubject] = useState('');
   const [search, setSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [dataError, setDataError] = useState('');
@@ -224,8 +240,40 @@ export default function AdminPage() {
       setClassrooms(snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as ClassroomRow)));
       setDataError('');
     }, () => setDataError('Classroom data could not be loaded.'));
-    return () => { stopUsers(); stopClasses(); };
+    const stopSubjects = onSnapshot(collection(db, 'subjectProposals'), (snapshot) => {
+      setSubjectProposals(snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as SubjectProposal)));
+    }, () => setDataError('Subject requests could not be loaded.'));
+    return () => { stopUsers(); stopClasses(); stopSubjects(); };
   }, [status]);
+
+  const reviewSubject = async (proposal: SubjectProposal, approved: boolean) => {
+    if (!user) return;
+    setReviewingSubject(proposal.id);
+    setDataError('');
+    try {
+      if (approved) {
+        const catalogId = `${proposal.schoolStage}-${proposal.schoolYear}-${proposal.normalizedLabel || proposal.label.toLowerCase()}`.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 120);
+        await setDoc(doc(db, 'subjectCatalog', catalogId), {
+          label: proposal.label,
+          normalizedLabel: proposal.normalizedLabel || proposal.label.toLowerCase(),
+          schoolStage: proposal.schoolStage,
+          schoolYear: proposal.schoolYear,
+          approvedFrom: proposal.id,
+          approvedBy: user.uid,
+          approvedAt: serverTimestamp(),
+        });
+      }
+      await updateDoc(doc(db, 'subjectProposals', proposal.id), {
+        status: approved ? 'approved' : 'rejected',
+        reviewedBy: user.uid,
+        reviewedAt: serverTimestamp(),
+      });
+    } catch {
+      setDataError('The subject request could not be reviewed. Please try again.');
+    } finally {
+      setReviewingSubject('');
+    }
+  };
 
   const stats = useMemo(() => {
     const students = users.filter((item) => item.role === 'student').length;
@@ -288,6 +336,8 @@ export default function AdminPage() {
         {tab === 'users' && <section className="admin-panel admin-directory"><DirectoryHead eyebrow={`${users.length} accounts`} title="User directory" value={search} onChange={setSearch} placeholder="Search name, email or role" />{filteredUsers.length ? <div className="admin-table"><div className="admin-table-head"><span>User</span><span>Role</span><span>Joined</span><span>Status</span></div>{filteredUsers.map((item) => <div className="admin-table-row" key={item.id}><div className="admin-user-cell"><Avatar photo={item.photoURL} name={item.displayName || item.email} /><div><b>{item.displayName || 'New user'}</b><small>{item.email || 'No email'}</small></div></div><span><em className={`role-pill ${item.role || 'user'}`}>{item.role || 'user'}</em></span><span>{dateLabel(item.createdAt)}</span><span className="active-status"><i /> Active</span></div>)}</div> : <EmptyState icon={Search} title="No matching users" text="Try a different name, email or role." />}</section>}
 
         {tab === 'classrooms' && <section className="admin-panel admin-directory"><DirectoryHead eyebrow={`${classrooms.length} learning spaces`} title="Classroom directory" value={search} onChange={setSearch} placeholder="Search classroom, teacher or code" />{filteredClasses.length ? <div className="admin-class-grid">{filteredClasses.map((item, index) => <article className={`admin-class-card tone-${index % 4}`} key={item.id}><div className="admin-class-top"><span><BookOpen /></span><em>{item.code || 'NO-CODE'}</em></div><small>{item.subject || 'General learning'}</small><h3>{item.name || 'Untitled classroom'}</h3><p>Led by {item.teacherName || 'Teacher'}</p><div className="admin-class-metrics"><span><Users /> {item.students || 0}/{item.maxStudents || 30}</span><b>{item.progress || 0}% progress</b></div><div className="admin-progress"><i style={{ width: `${Math.min(100, item.progress || 0)}%` }} /></div></article>)}</div> : <EmptyState icon={Search} title="No matching classrooms" text="Try another classroom name, teacher or code." />}</section>}
+
+        {tab === 'subjects' && <section className="admin-panel admin-directory"><div className="admin-directory-head"><div><p className="admin-eyebrow">{subjectProposals.filter((item) => item.status === 'pending').length} pending</p><h2>Subject approval requests</h2></div></div><div className="subject-request-list">{subjectProposals.filter((item) => item.status === 'pending').length ? subjectProposals.filter((item) => item.status === 'pending').map((item) => <article className="subject-request-card" key={item.id}><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Requested by {item.requesterName || item.requesterEmail || 'Teacher'} · {dateLabel(item.createdAt)}</p></div><div><button className="subject-reject" disabled={reviewingSubject === item.id} onClick={() => reviewSubject(item, false)}><X /> Reject</button><button className="admin-primary" disabled={reviewingSubject === item.id} onClick={() => reviewSubject(item, true)}>{reviewingSubject === item.id ? <LoaderCircle className="spin" /> : <Check />} Approve</button></div></article>) : <EmptyState icon={Check} title="No pending requests" text="New teacher-submitted subjects will appear here." />}</div></section>}
 
         {tab === 'reports' && <>
           <section className="admin-report-grid">

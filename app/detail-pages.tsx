@@ -98,6 +98,16 @@ type JoinRequest = {
   studentEmail: string;
 };
 const colours = ['lime', 'blue', 'violet'];
+const OTHER_SUBJECT = 'Others — request a new subject';
+const subjectId = (value: string) => value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'subject';
+
+function useApprovedSubjects(stage: SchoolStage, year: string) {
+  const [subjects, setSubjects] = useState<string[]>([]);
+  useEffect(() => onSnapshot(collection(db, 'subjectCatalog'), (snapshot) => {
+    setSubjects(snapshot.docs.map((item) => item.data()).filter((item) => item.schoolStage === stage && (item.schoolYear === year || item.schoolYear === 'all')).map((item) => String(item.label || '')).filter(Boolean));
+  }), [stage, year]);
+  return subjects;
+}
 const initials = (name?: string | null) =>
   (name || 'Learner')
     .split(/\s+/)
@@ -767,10 +777,13 @@ export function ClassroomsDetail({
     [schoolStage, setSchoolStage] = useState<SchoolStage>('primary'),
     [schoolYear, setSchoolYear] = useState('Tahun 1'),
     [newSubject, setNewSubject] = useState(''),
+    [customSubject, setCustomSubject] = useState(''),
+    [requestingSubject, setRequestingSubject] = useState(false),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState('');
   const count = classes.length;
-  const availableSubjects = subjectsFor(schoolStage, schoolYear),
+  const approvedSubjects = useApprovedSubjects(schoolStage, schoolYear);
+  const availableSubjects = [...subjectsFor(schoolStage, schoolYear), ...approvedSubjects.map((name) => ({ name, category: 'Admin-approved subjects' }))],
     subjectGroups = [
       ...new Set(availableSubjects.map((subject) => subject.category)),
     ];
@@ -785,7 +798,7 @@ export function ClassroomsDetail({
     setNewSubject('');
   };
   const createClass = async () => {
-    if (!newName.trim() || !newSubject || classes.length >= 3) return;
+    if (!newName.trim() || !newSubject || newSubject === OTHER_SUBJECT || classes.length >= 3) return;
     setBusy(true);
     setMessage('');
     try {
@@ -818,6 +831,25 @@ export function ClassroomsDetail({
       setMessage('Something went wrong. Please try again.');
     } finally {
       setBusy(false);
+    }
+  };
+  const requestCustomSubject = async () => {
+    const label = customSubject.trim().replace(/\s+/g, ' ');
+    if (label.length < 2) return setMessage('Enter a valid subject name.');
+    setRequestingSubject(true);
+    setMessage('');
+    try {
+      await setDoc(doc(db, 'subjectProposals', `${user.uid}-${schoolStage}-${schoolYear}-${subjectId(label)}`), {
+        label, normalizedLabel: label.toLowerCase(), schoolStage, schoolYear,
+        requesterId: user.uid, requesterName: user.displayName || 'Teacher', requesterEmail: user.email || '',
+        status: 'pending', createdAt: serverTimestamp(),
+      });
+      setCustomSubject('');
+      setMessage('Submitted for admin approval. It will appear here once approved.');
+    } catch {
+      setMessage('The subject request could not be submitted. Please try again.');
+    } finally {
+      setRequestingSubject(false);
     }
   };
   const decide = async (r: JoinRequest, approve: boolean) => {
@@ -1003,7 +1035,7 @@ export function ClassroomsDetail({
             <Combobox
               value={newSubject || null}
               onValueChange={(value) => setNewSubject(String(value || ''))}
-              items={availableSubjects.map((subject) => subject.name)}
+              items={[...availableSubjects.map((subject) => subject.name), OTHER_SUBJECT]}
             >
               <ComboboxInput
                 className="curriculum-combobox"
@@ -1027,6 +1059,10 @@ export function ClassroomsDetail({
                         ))}
                     </ComboboxGroup>
                   ))}
+                  <ComboboxGroup>
+                    <ComboboxLabel>Can’t find your subject?</ComboboxLabel>
+                    <ComboboxItem value={OTHER_SUBJECT}>{OTHER_SUBJECT}</ComboboxItem>
+                  </ComboboxGroup>
                 </ComboboxList>
               </ComboboxContent>
             </Combobox>
@@ -1035,6 +1071,14 @@ export function ClassroomsDetail({
               listed for {schoolYear}
             </small>
           </label>
+          {newSubject === OTHER_SUBJECT && (
+            <div className="custom-subject-request">
+              <label className="form-label">New subject name<Input value={customSubject} onChange={(e) => { setCustomSubject(e.target.value); setMessage(''); }} placeholder="Enter the official subject name" maxLength={100} /></label>
+              <Button type="button" variant="outline" onClick={requestCustomSubject} disabled={requestingSubject || customSubject.trim().length < 2}>
+                {requestingSubject ? <LoaderCircle /> : <Send />} Submit for admin approval
+              </Button>
+            </div>
+          )}
           {message && <p className="form-error">{message}</p>}
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
@@ -1042,7 +1086,7 @@ export function ClassroomsDetail({
             </Button>
             <Button
               onClick={createClass}
-              disabled={busy || !newName.trim() || !newSubject}
+              disabled={busy || !newName.trim() || !newSubject || newSubject === OTHER_SUBJECT}
             >
               {busy ? <LoaderCircle /> : <Plus />} Create
             </Button>

@@ -115,6 +115,11 @@ service cloud.firestore {
             && (request.auth.uid == resource.data.studentId || ownsClassroom(classroomId));
         }
       }
+
+      match /tags/{tagId} {
+        allow read: if signedIn() && (ownsClassroom(classroomId) || isActiveMember(classroomId) || isAdmin());
+        allow create, update, delete: if ownsClassroom(classroomId);
+      }
     }
 
     // AI workflow data is readable only by the owning teacher/reviewer. All
@@ -166,6 +171,23 @@ service cloud.firestore {
     match /quizAssets/{assetId} {
       allow read: if signedIn() && resource.data.ownerId == request.auth.uid;
       allow write: if false;
+    }
+
+    // Teachers may suggest missing curriculum subjects, but only an admin can
+    // approve them into the shared catalogue.
+    match /subjectProposals/{proposalId} {
+      allow create: if isTeacher()
+        && request.resource.data.requesterId == request.auth.uid
+        && request.resource.data.status == 'pending';
+      allow read: if signedIn()
+        && (resource.data.requesterId == request.auth.uid || isAdmin());
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /subjectCatalog/{subjectId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
     }
   }
 }

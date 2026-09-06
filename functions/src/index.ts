@@ -185,6 +185,8 @@ export const processQuizGenerationJob = onDocumentCreated(
         .map((material) => `SOURCE FILE: ${material.fileName}\n${material.text}`)
         .join('\n\n---\n\n');
       const settings = job.settings as Record<string, unknown>;
+      const tagSnapshot = await db.collection('classrooms').doc(String(job.classroomId)).collection('tags').limit(100).get();
+      const existingTags = tagSnapshot.docs.map((tag) => ({ id: tag.id, kind: String(tag.get('kind') ?? 'topic'), label: String(tag.get('label') ?? '') })).filter((tag) => tag.label);
       const generated = await generateQuiz({
         prompt: String(job.prompt ?? ''),
         sourceText,
@@ -197,6 +199,7 @@ export const processQuizGenerationJob = onDocumentCreated(
         questionTypes: (settings.questionTypes as string[]) ?? ['multiple_choice', 'short_answer'],
         learningObjectives: (settings.learningObjectives as string[]) ?? [],
         imageMode: String(settings.imageMode ?? 'none') as 'none' | 'upload' | 'generate',
+        existingTags,
       });
       const parsed = GeneratedQuizSchema.parse(generated);
       const questions = validateQuestionSet(parsed.questions.slice(0, Number(settings.questionCount))).map((question) => ({
@@ -354,6 +357,10 @@ export const enhanceStandaloneQuestion = onCall(
         explanation: input.answer || 'Teacher review required.',
         hints: [],
         difficulty: 'medium',
+        topic: 'General',
+        skills: [],
+        tagIds: [],
+        taggingConfidence: 'low',
         confidence: 'low',
         needsReview: true,
       };
@@ -420,6 +427,10 @@ export const recordQuizAttempt = onCall(async (request) => {
   const results = questions.map((question) => ({
     questionId: question.id,
     difficulty: question.difficulty,
+    topic: question.topic,
+    subtopic: question.subtopic,
+    skills: question.skills,
+    tagIds: question.tagIds,
     correct: input.answers[question.id]?.trim().toLowerCase() === question.correctAnswer.trim().toLowerCase(),
   }));
   const score = results.length ? Math.round((results.filter((result) => result.correct).length / results.length) * 100) : 0;
@@ -432,11 +443,17 @@ export const recordQuizAttempt = onCall(async (request) => {
     const attempts = Number(current.attempts ?? 0) + 1;
     const totalScore = Number(current.totalScore ?? 0) + score;
     const questionStats = { ...((current.questionStats as Record<string, { attempts: number; incorrect: number }> | undefined) ?? {}) };
+    const tagStats = { ...((current.tagStats as Record<string, { attempts: number; incorrect: number; unanswered: number; label: string; kind: string }> | undefined) ?? {}) };
     for (const result of results) {
       const previous = questionStats[result.questionId] ?? { attempts: 0, incorrect: 0 };
       questionStats[result.questionId] = { attempts: previous.attempts + 1, incorrect: previous.incorrect + (result.correct ? 0 : 1) };
+      const tags = [{ id: `topic:${result.topic}`, label: result.topic, kind: 'topic' }, ...(result.subtopic ? [{ id: `subtopic:${result.subtopic}`, label: result.subtopic, kind: 'subtopic' }] : []), ...result.skills.map((skill) => ({ id: `skill:${skill}`, label: skill, kind: 'skill' }))];
+      for (const tag of tags) {
+        const previousTag = tagStats[tag.id] ?? { attempts: 0, incorrect: 0, unanswered: 0, label: tag.label, kind: tag.kind };
+        tagStats[tag.id] = { ...previousTag, attempts: previousTag.attempts + 1, incorrect: previousTag.incorrect + (result.correct ? 0 : 1), unanswered: previousTag.unanswered + (input.answers[result.questionId]?.trim() ? 0 : 1) };
+      }
     }
-    transaction.set(analyticsRef, { quizId: input.quizId, classroomId, attempts, totalScore, averageScore: Math.round(totalScore / attempts), questionStats, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    transaction.set(analyticsRef, { quizId: input.quizId, classroomId, attempts, totalScore, averageScore: Math.round(totalScore / attempts), questionStats, tagStats, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
   });
   return { attemptId: attemptRef.id, score, results };
 });
