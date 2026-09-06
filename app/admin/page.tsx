@@ -298,6 +298,7 @@ export default function AdminPage() {
     setUser(nextUser);
     if (!nextUser) {
       setStatus('signed-out');
+      window.location.replace('/');
       return;
     }
     try {
@@ -512,7 +513,7 @@ export default function AdminPage() {
   };
 
   if (status === 'loading') return <main className="admin-loading"><span className="admin-brand"><span>S</span><b>SLearn</b></span><LoaderCircle className="spin" /><p>Checking secure access…</p></main>;
-  if (status === 'signed-out') return <AdminLogin />;
+  if (status === 'signed-out') return <main className="admin-loading"><span className="admin-brand"><span>S</span><b>SLearn</b></span><LoaderCircle className="spin" /><p>Returning to SLearn…</p></main>;
   if (status === 'denied' && user) return <AccessDenied user={user} />;
 
   const currentTitle = nav.find((item) => item.id === tab)?.label || 'Overview';
