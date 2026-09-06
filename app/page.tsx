@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
 import type { User } from 'firebase/auth';
 import { createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
@@ -27,6 +27,7 @@ import {
   AlertCircle,
   ArrowLeft,
   ArrowRight,
+  ArrowUpDown,
   BarChart3,
   BookOpen,
   Bot,
@@ -2192,8 +2193,86 @@ function Classroom({
       questions?: any[];
       questionCount?: number;
       enhanced?: boolean;
+      createdAt?: any;
     }[]
   >([]);
+  const [exerciseSearch, setExerciseSearch] = useState('');
+  const [exerciseSort, setExerciseSort] = useState<'newest' | 'oldest' | 'deadline' | 'title'>('newest');
+  const [exercisePage, setExercisePage] = useState(1);
+  const EXERCISES_PER_PAGE = 5;
+
+  const filteredAndSortedExercises = useMemo(() => {
+    let result = [...exercises];
+    if (exerciseSearch.trim()) {
+      const q = exerciseSearch.trim().toLowerCase();
+      result = result.filter((ex) => {
+        const titleMatch = ex.title?.toLowerCase().includes(q);
+        const singleQMatch = ex.question?.toLowerCase().includes(q);
+        const multiQMatch = ex.questions?.some((item: any) =>
+          item.question?.toLowerCase().includes(q),
+        );
+        return Boolean(titleMatch || singleQMatch || multiQMatch);
+      });
+    }
+
+    result.sort((a, b) => {
+      if (exerciseSort === 'newest') {
+        const timeA = a.createdAt?.toMillis
+          ? a.createdAt.toMillis()
+          : a.createdAt?.seconds
+            ? a.createdAt.seconds * 1000
+            : a.createdAt
+              ? new Date(a.createdAt).getTime()
+              : 0;
+        const timeB = b.createdAt?.toMillis
+          ? b.createdAt.toMillis()
+          : b.createdAt?.seconds
+            ? b.createdAt.seconds * 1000
+            : b.createdAt
+              ? new Date(b.createdAt).getTime()
+              : 0;
+        return timeB - timeA;
+      }
+      if (exerciseSort === 'oldest') {
+        const timeA = a.createdAt?.toMillis
+          ? a.createdAt.toMillis()
+          : a.createdAt?.seconds
+            ? a.createdAt.seconds * 1000
+            : a.createdAt
+              ? new Date(a.createdAt).getTime()
+              : 0;
+        const timeB = b.createdAt?.toMillis
+          ? b.createdAt.toMillis()
+          : b.createdAt?.seconds
+            ? b.createdAt.seconds * 1000
+            : b.createdAt
+              ? new Date(b.createdAt).getTime()
+              : 0;
+        return timeA - timeB;
+      }
+      if (exerciseSort === 'deadline') {
+        if (!a.deadline && !b.deadline) return 0;
+        if (!a.deadline) return 1;
+        if (!b.deadline) return -1;
+        return new Date(a.deadline).getTime() - new Date(b.deadline).getTime();
+      }
+      if (exerciseSort === 'title') {
+        return (a.title || '').localeCompare(b.title || '');
+      }
+      return 0;
+    });
+
+    return result;
+  }, [exercises, exerciseSearch, exerciseSort]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredAndSortedExercises.length / EXERCISES_PER_PAGE));
+  const currentPage = Math.min(Math.max(1, exercisePage), totalPages);
+
+  const paginatedExercises = useMemo(() => {
+    const start = (currentPage - 1) * EXERCISES_PER_PAGE;
+    return filteredAndSortedExercises.slice(start, start + EXERCISES_PER_PAGE);
+  }, [filteredAndSortedExercises, currentPage]);
+
   const [editOpen, setEditOpen] = useState(false),
     [editName, setEditName] = useState(classroom.name),
     [editSchoolStage, setEditSchoolStage] = useState<SchoolStage>(initialCurriculumSelection.stage),
@@ -2661,8 +2740,179 @@ function Classroom({
             </div>
           </div>
           {exercises.length ? (
-            <div style={{ display: 'grid', gap: '0.85rem', marginTop: '1rem' }}>
-              {exercises.map((ex, i) => {
+            <>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '0.75rem',
+                  flexWrap: 'wrap',
+                  marginTop: '1rem',
+                  marginBottom: '1rem',
+                }}
+              >
+                <div
+                  style={{
+                    position: 'relative',
+                    flex: '1 1 240px',
+                    maxWidth: '380px',
+                  }}
+                >
+                  <Search
+                    style={{
+                      position: 'absolute',
+                      left: '12px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      width: '16px',
+                      height: '16px',
+                      color: '#888',
+                      pointerEvents: 'none',
+                    }}
+                  />
+                  <Input
+                    type="text"
+                    placeholder="Search exercises by title or prompt..."
+                    value={exerciseSearch}
+                    onChange={(e) => {
+                      setExerciseSearch(e.target.value);
+                      setExercisePage(1);
+                    }}
+                    style={{
+                      paddingLeft: '36px',
+                      paddingRight: exerciseSearch ? '30px' : '12px',
+                      height: '38px',
+                      borderRadius: '12px',
+                      fontSize: '0.84rem',
+                      background: '#fff',
+                      borderColor: '#ded8cf',
+                    }}
+                  />
+                  {exerciseSearch && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExerciseSearch('');
+                        setExercisePage(1);
+                      }}
+                      style={{
+                        position: 'absolute',
+                        right: '10px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        border: 'none',
+                        background: 'none',
+                        cursor: 'pointer',
+                        color: '#888',
+                        padding: 0,
+                        display: 'flex',
+                      }}
+                      aria-label="Clear search"
+                    >
+                      <X style={{ width: 14, height: 14 }} />
+                    </button>
+                  )}
+                </div>
+
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: '0.8rem',
+                      color: '#666',
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    <ArrowUpDown style={{ width: 14, height: 14 }} /> Sort:
+                  </span>
+                  <select
+                    value={exerciseSort}
+                    onChange={(e) => {
+                      setExerciseSort(e.target.value as any);
+                      setExercisePage(1);
+                    }}
+                    style={{
+                      height: '38px',
+                      padding: '0 10px',
+                      borderRadius: '12px',
+                      border: '1px solid #ded8cf',
+                      background: '#fff',
+                      fontSize: '0.82rem',
+                      fontWeight: 600,
+                      color: '#111',
+                      cursor: 'pointer',
+                      outline: 'none',
+                    }}
+                  >
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="deadline">Deadline (soonest)</option>
+                    <option value="title">Title (A–Z)</option>
+                  </select>
+                </div>
+              </div>
+
+              {filteredAndSortedExercises.length === 0 ? (
+                <div
+                  style={{
+                    textAlign: 'center',
+                    padding: '2.5rem 1.5rem',
+                    background: '#fcfbf9',
+                    borderRadius: '16px',
+                    border: '1px dashed #ded8cf',
+                    marginTop: '0.5rem',
+                  }}
+                >
+                  <Search
+                    style={{
+                      width: 28,
+                      height: 28,
+                      margin: '0 auto 0.5rem',
+                      color: '#999',
+                    }}
+                  />
+                  <p
+                    style={{
+                      fontWeight: 600,
+                      margin: '0 0 0.4rem',
+                      color: '#333',
+                    }}
+                  >
+                    No exercises match &ldquo;{exerciseSearch}&rdquo;
+                  </p>
+                  <small
+                    style={{
+                      color: '#777',
+                      display: 'block',
+                      marginBottom: '1rem',
+                    }}
+                  >
+                    Try different keywords or clear your search.
+                  </small>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setExerciseSearch('');
+                      setExercisePage(1);
+                    }}
+                  >
+                    Clear search
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: 'grid', gap: '0.85rem' }}>
+                    {paginatedExercises.map((ex, i) => {
                 const count = ex.questionCount || ex.questions?.length || 1;
                 const firstQ =
                   ex.question ||
@@ -3089,7 +3339,116 @@ function Classroom({
                   </div>
                 );
               })}
-            </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: '0.75rem',
+                      marginTop: '1.25rem',
+                      paddingTop: '1rem',
+                      borderTop: '1px solid #eeeae4',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.78rem', color: '#666' }}>
+                      Showing{' '}
+                      <strong>
+                        {(currentPage - 1) * EXERCISES_PER_PAGE + 1}–
+                        {Math.min(
+                          currentPage * EXERCISES_PER_PAGE,
+                          filteredAndSortedExercises.length,
+                        )}
+                      </strong>{' '}
+                      of <strong>{filteredAndSortedExercises.length}</strong>{' '}
+                      exercise{filteredAndSortedExercises.length !== 1 ? 's' : ''}
+                      {exerciseSearch.trim() && (
+                        <span> (filtered from {exercises.length})</span>
+                      )}
+                    </span>
+
+                    {totalPages > 1 && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={currentPage === 1}
+                          onClick={() =>
+                            setExercisePage((prev) => Math.max(1, prev - 1))
+                          }
+                          style={{
+                            height: '32px',
+                            padding: '0 10px',
+                            fontSize: '0.76rem',
+                          }}
+                        >
+                          <ArrowLeft style={{ width: 12, height: 12 }} /> Prev
+                        </Button>
+
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          {Array.from(
+                            { length: totalPages },
+                            (_, idx) => idx + 1,
+                          ).map((pageNum) => (
+                            <button
+                              key={pageNum}
+                              type="button"
+                              onClick={() => setExercisePage(pageNum)}
+                              style={{
+                                width: '32px',
+                                height: '32px',
+                                borderRadius: '8px',
+                                border: '1px solid',
+                                borderColor:
+                                  currentPage === pageNum
+                                    ? '#173e30'
+                                    : '#e5e1da',
+                                background:
+                                  currentPage === pageNum ? '#173e30' : '#fff',
+                                color:
+                                  currentPage === pageNum ? '#fff' : '#444',
+                                fontWeight:
+                                  currentPage === pageNum ? 700 : 500,
+                                fontSize: '0.78rem',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {pageNum}
+                            </button>
+                          ))}
+                        </div>
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={currentPage === totalPages}
+                          onClick={() =>
+                            setExercisePage((prev) =>
+                              Math.min(totalPages, prev + 1),
+                            )
+                          }
+                          style={{
+                            height: '32px',
+                            padding: '0 10px',
+                            fontSize: '0.76rem',
+                          }}
+                        >
+                          Next <ArrowRight style={{ width: 12, height: 12 }} />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </>
           ) : (
             <div className="class-empty">
               <FileQuestion />
