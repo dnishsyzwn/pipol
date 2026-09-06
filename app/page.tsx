@@ -55,6 +55,7 @@ import {
   EyeOff,
   KeyRound,
   LayoutDashboard,
+  LineChart,
   LoaderCircle,
   Lock,
   LogIn,
@@ -98,11 +99,11 @@ import {
 } from '@/components/ui/dialog';
 import { auth, db, functions, googleProvider, initializeSlearnAppCheck, storage } from '@/lib/firebase';
 import { curriculumFor, resolveCurriculumSelection, SCHOOL_STAGES, SCHOOL_YEARS, subjectsFor, type SchoolStage } from '@/lib/malaysia-curriculum';
-import { ClassroomsDetail, ProgressDetail } from './detail-pages';
+import { AnalyticsDetail, ClassroomsDetail, ProgressDetail } from './detail-pages';
 
 type Role = 'teacher' | 'student';
 type Difficulty = 'easy' | 'medium' | 'hard';
-type View = 'dashboard' | 'classes' | 'progress' | 'classroom' | 'quiz' | 'exercise';
+type View = 'dashboard' | 'classes' | 'progress' | 'analytics' | 'classroom' | 'quiz' | 'exercise';
 type ClassroomData = {
   id: string;
   name: string;
@@ -137,6 +138,14 @@ type Membership = {
   teacherName: string;
   progress: number;
   tasks: number;
+};
+type ClassroomMember = {
+  id: string;
+  uid: string;
+  name: string;
+  email?: string;
+  progress?: number;
+  joinedAt?: any;
 };
 type QuestionItem = {
   id: string;
@@ -1282,7 +1291,7 @@ function ResetPasswordPage({
     </main>
   );
 }
-type NavTarget = 'overview' | 'classes' | 'progress';
+type NavTarget = 'overview' | 'classes' | 'progress' | 'analytics';
 function AppShell({
   role,
   user,
@@ -1346,6 +1355,10 @@ function AppShell({
           <button className={active === 'progress' ? 'active' : ''} onClick={() => go('progress')} title="Progress">
             <BarChart3 />
             <span>Progress</span>
+          </button>
+          <button className={active === 'analytics' ? 'active' : ''} onClick={() => go('analytics')} title="Analytics">
+            <LineChart />
+            <span>Analytics</span>
           </button>
         </nav>
         <div className="sidebar-foot">
@@ -1563,6 +1576,103 @@ function TeacherDashboard({
     if (!classes.length) setRequests([]);
     return () => unsubs.forEach((u) => u());
   }, [classes.map((c) => c.id).join('|')]);
+
+  useEffect(() => {
+    if (!classes.length) return;
+    const unsubs: (() => void)[] = [];
+
+    classes.forEach((c) => {
+      const classId = c.id;
+      const exCol = collection(db, 'classrooms', classId, 'exercises');
+      const unsubEx = onSnapshot(exCol, (exSnap) => {
+        const exDocs = exSnap.docs;
+        const totalExercises = exDocs.length;
+
+        if (totalExercises === 0) {
+          setClasses((prev) =>
+            prev.map((item) =>
+              item.id === classId ? { ...item, progress: 0 } : item,
+            ),
+          );
+          if (c.progress !== 0) {
+            setDoc(
+              doc(db, 'classrooms', classId),
+              { progress: 0 },
+              { merge: true },
+            ).catch(console.warn);
+          }
+          return;
+        }
+
+        const subCounts: Record<string, number> = {};
+        const subUnsubs: (() => void)[] = [];
+
+        const computeAndSetClassProgress = () => {
+          const totalSubs = Object.values(subCounts).reduce((a, b) => a + b, 0);
+          const studentCount = c.students || 0;
+          let progressPct = 0;
+
+          if (studentCount > 0 && totalExercises > 0) {
+            progressPct = Math.min(
+              100,
+              Math.round((totalSubs / (totalExercises * studentCount)) * 100),
+            );
+          } else if (totalSubs > 0 && totalExercises > 0) {
+            progressPct = Math.min(
+              100,
+              Math.round((totalSubs / totalExercises) * 100),
+            );
+          }
+
+          setClasses((prev) =>
+            prev.map((item) =>
+              item.id === classId ? { ...item, progress: progressPct } : item,
+            ),
+          );
+
+          setDoc(
+            doc(db, 'classrooms', classId),
+            { progress: progressPct },
+            { merge: true },
+          ).catch(console.warn);
+        };
+
+        exDocs.forEach((exDoc) => {
+          const subCol = collection(
+            db,
+            'classrooms',
+            classId,
+            'exercises',
+            exDoc.id,
+            'submissions',
+          );
+          const uSub = onSnapshot(subCol, (subSnap) => {
+            const studentIds = new Set<string>();
+            subSnap.docs.forEach((docSnap) => {
+              const d = docSnap.data();
+              const sId = d.studentId || docSnap.id;
+              if (sId) studentIds.add(sId);
+            });
+            subCounts[exDoc.id] = studentIds.size;
+            computeAndSetClassProgress();
+          });
+          subUnsubs.push(uSub);
+        });
+
+        unsubs.push(() => subUnsubs.forEach((u) => u()));
+      });
+
+      unsubs.push(unsubEx);
+    });
+
+    return () => unsubs.forEach((u) => u());
+  }, [
+    user.uid,
+    classes
+      .map((c) => `${c.id}:${c.students || 0}`)
+      .sort()
+      .join(','),
+  ]);
 
   const createClass = async () => {
     if (!newName.trim() || !newSubject || newSubject === OTHER_SUBJECT) return;
@@ -2653,6 +2763,14 @@ function Classroom({
   const [exercisePage, setExercisePage] = useState(1);
   const EXERCISES_PER_PAGE = 5;
 
+  const [activeTab, setActiveTab] = useState<'exercises' | 'students'>('exercises');
+  const [members, setMembers] = useState<ClassroomMember[]>([]);
+  const [studentSearch, setStudentSearch] = useState('');
+  const [removingStudent, setRemovingStudent] = useState<ClassroomMember | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState('');
+  const [copiedCode, setCopiedCode] = useState(false);
+
   const filteredAndSortedExercises = useMemo(() => {
     let result = [...exercises];
     if (exerciseSearch.trim()) {
@@ -2757,6 +2875,25 @@ function Classroom({
     () =>
       onSnapshot(collection(db, 'classrooms', classroom.id, 'exercises'), (s) =>
         setExercises(s.docs.map((d) => ({ id: d.id, ...d.data() }) as any)),
+      ),
+    [classroom.id],
+  );
+  useEffect(
+    () =>
+      onSnapshot(collection(db, 'classrooms', classroom.id, 'members'), (s) =>
+        setMembers(
+          s.docs.map((d) => {
+            const data = d.data();
+            return {
+              id: d.id,
+              uid: data.uid || d.id,
+              name: data.name || 'Student',
+              email: data.email || '',
+              progress: data.progress || 0,
+              joinedAt: data.joinedAt,
+            } as ClassroomMember;
+          }),
+        ),
       ),
     [classroom.id],
   );
@@ -3123,6 +3260,52 @@ function Classroom({
     }
   };
 
+  const handleRemoveStudent = async () => {
+    if (!removingStudent) return;
+    setRemoveBusy(true);
+    setRemoveError('');
+    try {
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'classrooms', classroom.id, 'members', removingStudent.id));
+      batch.delete(doc(db, 'users', removingStudent.uid, 'memberships', classroom.id));
+      batch.update(doc(db, 'classrooms', classroom.id), {
+        students: increment(-1),
+      });
+      await batch.commit();
+      setRemovingStudent(null);
+    } catch (e) {
+      setRemoveError(friendlyError(e));
+    } finally {
+      setRemoveBusy(false);
+    }
+  };
+
+  const filteredMembers = useMemo(() => {
+    if (!studentSearch.trim()) return members;
+    const q = studentSearch.trim().toLowerCase();
+    return members.filter(
+      (m) =>
+        m.name?.toLowerCase().includes(q) ||
+        m.email?.toLowerCase().includes(q),
+    );
+  }, [members, studentSearch]);
+
+  const studentPerformanceMap = useMemo(() => {
+    const map: Record<string, { completed: number; totalScore: number }> = {};
+    Object.values(analyticsMap).forEach((stat) => {
+      stat.submissions.forEach((sub) => {
+        const sId = sub.studentId || sub.id;
+        if (!map[sId]) {
+          map[sId] = { completed: 0, totalScore: 0 };
+        }
+        map[sId].completed += 1;
+        map[sId].totalScore += sub.score || 0;
+      });
+    });
+    return map;
+  }, [analyticsMap]);
+
+
   return (
     <AppShell
       role={role}
@@ -3179,7 +3362,84 @@ function Classroom({
           </div>
         )}
       </div>
-      <div className="classroom-layout">
+      <div
+        style={{
+          display: 'flex',
+          gap: '8px',
+          alignItems: 'center',
+          marginTop: '1.25rem',
+          marginBottom: '1rem',
+          borderBottom: '1px solid #eeeae4',
+          paddingBottom: '0.75rem',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setActiveTab('exercises')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 16px',
+            borderRadius: '12px',
+            border: activeTab === 'exercises' ? '1px solid #173e30' : '1px solid transparent',
+            background: activeTab === 'exercises' ? '#173e30' : '#f4f1ea',
+            color: activeTab === 'exercises' ? '#fff' : '#555',
+            fontWeight: 700,
+            fontSize: '0.85rem',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <BookOpen style={{ width: 16, height: 16 }} /> Exercises
+          <span
+            style={{
+              padding: '1px 7px',
+              borderRadius: '999px',
+              fontSize: '0.72rem',
+              background: activeTab === 'exercises' ? 'rgba(255,255,255,0.25)' : '#e5e0d7',
+              color: activeTab === 'exercises' ? '#fff' : '#444',
+            }}
+          >
+            {exercises.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('students')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 16px',
+            borderRadius: '12px',
+            border: activeTab === 'students' ? '1px solid #173e30' : '1px solid transparent',
+            background: activeTab === 'students' ? '#173e30' : '#f4f1ea',
+            color: activeTab === 'students' ? '#fff' : '#555',
+            fontWeight: 700,
+            fontSize: '0.85rem',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <Users style={{ width: 16, height: 16 }} /> Students
+          <span
+            style={{
+              padding: '1px 7px',
+              borderRadius: '999px',
+              fontSize: '0.72rem',
+              background: activeTab === 'students' ? 'rgba(255,255,255,0.25)' : '#e5e0d7',
+              color: activeTab === 'students' ? '#fff' : '#444',
+            }}
+          >
+            {members.length || currentClass.students || 0}
+          </span>
+        </button>
+      </div>
+
+      {activeTab === 'exercises' ? (
+        <div className="classroom-layout">
         <section className="panel activity-panel">
           <div className="panel-head">
             <div>
@@ -4007,6 +4267,536 @@ function Classroom({
           </div>
         </aside>
       </div>
+      ) : (
+        <div className="classroom-layout">
+          <section className="panel activity-panel">
+            <div className="panel-head">
+              <div>
+                <span className="kicker">Class roster</span>
+                <h2>
+                  {members.length
+                    ? `${members.length} Enrolled Student${members.length > 1 ? 's' : ''}`
+                    : 'No students enrolled yet'}
+                </h2>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.75rem',
+                flexWrap: 'wrap',
+                marginTop: '1rem',
+                marginBottom: '1rem',
+              }}
+            >
+              <div
+                style={{
+                  position: 'relative',
+                  flex: '1 1 240px',
+                  maxWidth: '380px',
+                }}
+              >
+                <Search
+                  style={{
+                    position: 'absolute',
+                    left: '12px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    width: '16px',
+                    height: '16px',
+                    color: '#888',
+                    pointerEvents: 'none',
+                  }}
+                />
+                <Input
+                  type="text"
+                  placeholder="Search students by name or email..."
+                  value={studentSearch}
+                  onChange={(e) => setStudentSearch(e.target.value)}
+                  style={{
+                    paddingLeft: '36px',
+                    paddingRight: studentSearch ? '30px' : '12px',
+                    height: '38px',
+                    borderRadius: '12px',
+                    fontSize: '0.84rem',
+                    background: '#fff',
+                    borderColor: '#ded8cf',
+                  }}
+                />
+                {studentSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setStudentSearch('')}
+                    style={{
+                      position: 'absolute',
+                      right: '10px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      border: 'none',
+                      background: 'none',
+                      cursor: 'pointer',
+                      color: '#888',
+                      padding: 0,
+                      display: 'flex',
+                    }}
+                    aria-label="Clear search"
+                  >
+                    <X style={{ width: 14, height: 14 }} />
+                  </button>
+                )}
+              </div>
+
+              <div style={{ fontSize: '0.82rem', color: '#666', fontWeight: 600 }}>
+                Showing {filteredMembers.length} of {members.length} student{members.length !== 1 ? 's' : ''}
+              </div>
+            </div>
+
+            {members.length === 0 ? (
+              <div className="class-empty">
+                <Users />
+                <h3>No learners enrolled yet</h3>
+                <p>
+                  {role === 'teacher'
+                    ? `Share the classroom code "${currentClass.code}" with your students so they can join.`
+                    : 'You are the first student to explore this classroom!'}
+                </p>
+                {role === 'teacher' && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      navigator.clipboard.writeText(currentClass.code);
+                      setCopiedCode(true);
+                      setTimeout(() => setCopiedCode(false), 2000);
+                    }}
+                  >
+                    {copiedCode ? (
+                      <>
+                        <Check style={{ width: 14, height: 14, color: '#166534' }} /> Code copied!
+                      </>
+                    ) : (
+                      <>
+                        <Copy style={{ width: 14, height: 14 }} /> Copy class code: {currentClass.code}
+                      </>
+                    )}
+                  </Button>
+                )}
+              </div>
+            ) : filteredMembers.length === 0 ? (
+              <div
+                style={{
+                  textAlign: 'center',
+                  padding: '2.5rem 1.5rem',
+                  background: '#fcfbf9',
+                  borderRadius: '16px',
+                  border: '1px dashed #ded8cf',
+                  marginTop: '0.5rem',
+                }}
+              >
+                <Search
+                  style={{
+                    width: 28,
+                    height: 28,
+                    margin: '0 auto 0.5rem',
+                    color: '#999',
+                  }}
+                />
+                <p
+                  style={{
+                    fontWeight: 600,
+                    margin: '0 0 0.4rem',
+                    color: '#333',
+                  }}
+                >
+                  No students match &ldquo;{studentSearch}&rdquo;
+                </p>
+                <small
+                  style={{
+                    color: '#777',
+                    display: 'block',
+                    marginBottom: '1rem',
+                  }}
+                >
+                  Try searching by a different name or email.
+                </small>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setStudentSearch('')}
+                >
+                  Clear search
+                </Button>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: '0.75rem' }}>
+                {filteredMembers.map((member, i) => {
+                  const isCurrentUser = member.uid === user.uid;
+                  const stats = studentPerformanceMap[member.uid];
+                  const completedCount = stats ? stats.completed : 0;
+                  const pct =
+                    exercises.length > 0
+                      ? Math.round((completedCount / exercises.length) * 100)
+                      : member.progress || 0;
+
+                  const joinedDate = member.joinedAt
+                    ? member.joinedAt.toDate
+                      ? member.joinedAt.toDate().toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                        })
+                      : typeof member.joinedAt === 'string'
+                        ? new Date(member.joinedAt).toLocaleDateString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric',
+                          })
+                        : 'Enrolled'
+                    : 'Enrolled';
+
+                  return (
+                    <div
+                      key={member.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '1rem',
+                        padding: '1rem 1.25rem',
+                        background: isCurrentUser ? '#f5f9f6' : '#fff',
+                        border: isCurrentUser
+                          ? '1.5px solid #2e7d32'
+                          : '1px solid #eeeae4',
+                        borderRadius: '16px',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '12px',
+                          minWidth: '220px',
+                        }}
+                      >
+                        <span
+                          className={`avatar ${colours[i % colours.length]}`}
+                          style={{
+                            width: '42px',
+                            height: '42px',
+                            fontSize: '0.85rem',
+                            fontWeight: 700,
+                            flexShrink: 0,
+                          }}
+                        >
+                          {initials(member.name)}
+                        </span>
+                        <div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontWeight: 700,
+                                fontSize: '0.95rem',
+                                color: '#111',
+                              }}
+                            >
+                              {member.name}
+                            </span>
+                            {isCurrentUser && (
+                              <span
+                                style={{
+                                  background: '#e8f5e9',
+                                  color: '#1b5e20',
+                                  fontSize: '0.68rem',
+                                  fontWeight: 700,
+                                  padding: '2px 7px',
+                                  borderRadius: '999px',
+                                  border: '1px solid #a5d6a7',
+                                }}
+                              >
+                                You
+                              </span>
+                            )}
+                          </div>
+                          {member.email && (
+                            <small
+                              style={{
+                                color: '#666',
+                                fontSize: '0.78rem',
+                                display: 'block',
+                                marginTop: '1px',
+                              }}
+                            >
+                              {member.email}
+                            </small>
+                          )}
+                          <small
+                            style={{
+                              color: '#888',
+                              fontSize: '0.72rem',
+                              display: 'block',
+                              marginTop: '2px',
+                            }}
+                          >
+                            {joinedDate}
+                          </small>
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '1.25rem',
+                          marginLeft: 'auto',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div
+                          style={{
+                            minWidth: '130px',
+                            textAlign: 'right',
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: '0.82rem',
+                              fontWeight: 700,
+                              color: '#111',
+                              marginBottom: '4px',
+                            }}
+                          >
+                            {completedCount} / {exercises.length} activities
+                          </div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              justifyContent: 'flex-end',
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: '80px',
+                                height: '6px',
+                                background: '#eeeae4',
+                                borderRadius: '999px',
+                                overflow: 'hidden',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: `${Math.min(100, pct)}%`,
+                                  height: '100%',
+                                  background: '#173e30',
+                                  borderRadius: '999px',
+                                }}
+                              />
+                            </div>
+                            <span
+                              style={{
+                                fontSize: '0.72rem',
+                                color: '#555',
+                                fontWeight: 600,
+                              }}
+                            >
+                              {pct}%
+                            </span>
+                          </div>
+                        </div>
+
+                        {role === 'teacher' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setRemovingStudent(member);
+                              setRemoveError('');
+                            }}
+                            style={{
+                              color: '#dc2626',
+                              borderColor: '#fca5a5',
+                              height: '32px',
+                              padding: '0 10px',
+                              fontSize: '0.75rem',
+                            }}
+                          >
+                            <Trash2 style={{ width: 13, height: 13 }} /> Remove
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <aside className="panel class-stats">
+            <span className="kicker">Class overview</span>
+            <h2>
+              {members.length} / {currentClass.maxStudents || 30}
+            </h2>
+            <p style={{ fontSize: '0.8rem', color: '#666', marginTop: '-4px', marginBottom: '1rem' }}>
+              Enrolled learners in this class
+            </p>
+
+            <Progress
+              value={
+                currentClass.maxStudents
+                  ? Math.round(
+                      (members.length / (currentClass.maxStudents || 30)) * 100,
+                    )
+                  : 0
+              }
+            />
+
+            <div
+              style={{
+                marginTop: '1.25rem',
+                padding: '1rem',
+                background: '#fcfbf9',
+                borderRadius: '14px',
+                border: '1px solid #eeeae4',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: '0.76rem',
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                  color: '#666',
+                  marginBottom: '6px',
+                }}
+              >
+                Classroom Code
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: '1.15rem',
+                    fontWeight: 800,
+                    letterSpacing: '0.05em',
+                    color: '#173e30',
+                    fontFamily: 'monospace',
+                  }}
+                >
+                  {currentClass.code}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    navigator.clipboard.writeText(currentClass.code);
+                    setCopiedCode(true);
+                    setTimeout(() => setCopiedCode(false), 2000);
+                  }}
+                  style={{ height: '30px', padding: '0 8px', fontSize: '0.74rem' }}
+                >
+                  {copiedCode ? (
+                    <>
+                      <Check style={{ width: 12, height: 12, color: '#166534' }} /> Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy style={{ width: 12, height: 12 }} /> Copy
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            <div className="tip" style={{ marginTop: '1rem' }}>
+              <Sparkles />
+              <p>
+                {role === 'teacher'
+                  ? 'Students can enter the class code on their dashboard to send a join request. Once approved, they appear here.'
+                  : 'You are viewing your classmates in this room. Keep learning together!'}
+              </p>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* Remove Student Confirmation Dialog */}
+      <Dialog
+        open={!!removingStudent}
+        onOpenChange={(open) => !open && setRemovingStudent(null)}
+      >
+        <DialogContent className="modal-card">
+          <DialogHeader>
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 42,
+                height: 42,
+                borderRadius: '50%',
+                background: '#fee2e2',
+                color: '#dc2626',
+                marginBottom: 10,
+              }}
+            >
+              <Trash2 style={{ width: 20, height: 20 }} />
+            </div>
+            <DialogTitle>Remove student from class?</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to remove <strong>{removingStudent?.name}</strong> from {currentClass.name}?
+            </DialogDescription>
+          </DialogHeader>
+          <div
+            style={{
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: 14,
+              padding: '12px 14px',
+              color: '#991b1b',
+              fontSize: '0.8rem',
+              lineHeight: 1.5,
+            }}
+          >
+            <strong>Note:</strong> Removing this student will revoke their access to this classroom and its exercises.
+          </div>
+          {removeError && <p className="form-error">{removeError}</p>}
+          <DialogFooter style={{ marginTop: 12 }}>
+            <Button
+              variant="outline"
+              onClick={() => setRemovingStudent(null)}
+              disabled={removeBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleRemoveStudent}
+              disabled={removeBusy}
+              style={{ background: '#dc2626', color: '#fff' }}
+            >
+              {removeBusy ? <LoaderCircle /> : <Trash2 />}{' '}
+              {removeBusy ? 'Removing…' : 'Remove student'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={!!activeAnalyticsEx}
         onOpenChange={(open) => !open && setActiveAnalyticsEx(null)}
@@ -7244,6 +8034,13 @@ export default function Home() {
       <AppShell role={role} user={user} onExit={logout} active="progress" classCount={detailCount}>
         <Topbar role={role} user={user} />
         <ProgressDetail role={role} user={user} onOpen={openDetailedClass} onCountChange={setDetailCount} />
+      </AppShell>
+    );
+  if (view === 'analytics')
+    return (
+      <AppShell role={role} user={user} onExit={logout} active="analytics" classCount={detailCount}>
+        <Topbar role={role} user={user} />
+        <AnalyticsDetail role={role} user={user} />
       </AppShell>
     );
   if (view === 'exercise' && selectedClass && selectedExercise)
