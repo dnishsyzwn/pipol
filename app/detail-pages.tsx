@@ -1408,6 +1408,10 @@ export function AnalyticsDetail({
   const [activeAnalyticsTab, setActiveAnalyticsTab] = useState<'students' | 'exercises'>('students');
   const [expandedStudentId, setExpandedStudentId] = useState<string | null>(null);
   const [expandedExerciseId, setExpandedExerciseId] = useState<string | null>(null);
+  const [showStudentMasteryModal, setShowStudentMasteryModal] = useState(false);
+  const [showTopicMasteryModal, setShowTopicMasteryModal] = useState(false);
+  const [modalStudentTab, setModalStudentTab] = useState<'all' | 'highest' | 'struggling'>('all');
+  const [modalTopicTab, setModalTopicTab] = useState<'all' | 'easiest' | 'hardest'>('all');
 
   // Listen to exercises and members for the active classroom (Teacher)
   useEffect(() => {
@@ -1837,24 +1841,61 @@ export function AnalyticsDetail({
                     borderRadius: '16px',
                     padding: '1.25rem',
                     boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
                   }}
                 >
-                  <h3
-                    style={{
-                      fontSize: '0.78rem',
-                      fontWeight: 700,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.06em',
-                      color: '#555',
-                      margin: '0 0 0.85rem 0',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                    }}
-                  >
-                    <Users style={{ width: 13, height: 13 }} />
-                    Student Mastery Distribution
-                  </h3>
+                  <div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.5rem',
+                        marginBottom: '0.85rem',
+                      }}
+                    >
+                      <h3
+                        style={{
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.06em',
+                          color: '#555',
+                          margin: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <Users style={{ width: 13, height: 13 }} />
+                        Student Mastery Distribution
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setModalStudentTab('all');
+                          setShowStudentMasteryModal(true);
+                        }}
+                        style={{
+                          background: '#f4efe8',
+                          color: '#173e30',
+                          border: 'none',
+                          borderRadius: '8px',
+                          padding: '4px 10px',
+                          fontSize: '0.74rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        View More <ChevronRight style={{ width: 12, height: 12 }} />
+                      </button>
+                    </div>
                   {(() => {
                     const strong = studentsList.filter((s) => s.totalPoints > 0 && s.scoreAvg >= 80).length;
                     const onTrack = studentsList.filter(
@@ -1963,6 +2004,7 @@ export function AnalyticsDetail({
                       </div>
                     );
                   })()}
+                  </div>
                 </div>
 
                 {/* Chart 2: Topic & Subtopic Mastery (donut + hardest & easiest) */}
@@ -1973,24 +2015,63 @@ export function AnalyticsDetail({
                     borderRadius: '16px',
                     padding: '1.25rem',
                     boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
                   }}
                 >
-                  <h3
-                    style={{
-                      fontSize: '0.78rem',
-                      fontWeight: 700,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.06em',
-                      color: '#555',
-                      margin: '0 0 0.85rem 0',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                    }}
-                  >
-                    <BookOpen style={{ width: 13, height: 13 }} />
-                    Topic &amp; Subtopic Mastery
-                  </h3>
+                  <div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.5rem',
+                        marginBottom: '0.85rem',
+                      }}
+                    >
+                      <h3
+                        style={{
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.06em',
+                          color: '#555',
+                          margin: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <BookOpen style={{ width: 13, height: 13 }} />
+                        Topic &amp; Subtopic Mastery
+                      </h3>
+                      {topicPerformanceList.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setModalTopicTab('all');
+                            setShowTopicMasteryModal(true);
+                          }}
+                          style={{
+                            background: '#f4efe8',
+                            color: '#173e30',
+                            border: 'none',
+                            borderRadius: '8px',
+                            padding: '4px 10px',
+                            fontSize: '0.74rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            transition: 'all 0.15s',
+                          }}
+                        >
+                          View More <ChevronRight style={{ width: 12, height: 12 }} />
+                        </button>
+                      )}
+                    </div>
 
                   {topicPerformanceList.length === 0 ? (
                     <div style={{ padding: '1rem', color: '#888', fontSize: '0.82rem', textAlign: 'center' }}>
@@ -2182,6 +2263,7 @@ export function AnalyticsDetail({
                       );
                     })()
                   )}
+                  </div>
                 </div>
               </div>
             )}
@@ -2911,6 +2993,395 @@ export function AnalyticsDetail({
                 )}
               </section>
             )}
+            {/* ── FULL PAGE MODAL: Student Mastery Insights ── */}
+            <Dialog open={showStudentMasteryModal} onOpenChange={setShowStudentMasteryModal}>
+              <DialogContent className="modal-card" style={{ maxWidth: '840px', width: '92vw', maxHeight: '90vh', overflowY: 'auto' }}>
+                <DialogHeader>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: '#e8f1e9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#173e30' }}>
+                      <Users style={{ width: 16, height: 16 }} />
+                    </div>
+                    <div>
+                      <DialogTitle style={{ fontSize: '1.2rem', fontWeight: 800 }}>Student Mastery Analysis</DialogTitle>
+                      <DialogDescription style={{ fontSize: '0.8rem', color: '#666' }}>
+                        Performance ranking, highest performers, and learners requiring support in {activeClass?.name || 'this class'}.
+                      </DialogDescription>
+                    </div>
+                  </div>
+                </DialogHeader>
+
+                {(() => {
+                  const withSubs = studentsList.filter((s) => s.totalPoints > 0);
+                  const highestPerformer = withSubs.length > 0 ? [...withSubs].sort((a, b) => b.scoreAvg - a.scoreAvg)[0] : null;
+                  const lowestPerformer = withSubs.length > 0 ? [...withSubs].sort((a, b) => a.scoreAvg - b.scoreAvg)[0] : null;
+
+                  const filteredByTab = studentsList.filter((s) => {
+                    if (modalStudentTab === 'highest') return s.totalPoints > 0 && s.scoreAvg >= 80;
+                    if (modalStudentTab === 'struggling') return s.totalPoints > 0 && s.scoreAvg < 60;
+                    return true;
+                  }).sort((a, b) => {
+                    if (modalStudentTab === 'highest') return b.scoreAvg - a.scoreAvg;
+                    if (modalStudentTab === 'struggling') return a.scoreAvg - b.scoreAvg;
+                    return b.scoreAvg - a.scoreAvg;
+                  });
+
+                  return (
+                    <div style={{ display: 'grid', gap: '1.25rem', marginTop: '0.5rem' }}>
+                      {/* Top Highlights */}
+                      {withSubs.length > 0 && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.85rem' }}>
+                          {highestPerformer && (
+                            <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '12px 14px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#15803d', fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase' }}>
+                                <Award style={{ width: 14, height: 14 }} /> Top Performer
+                              </div>
+                              <div style={{ fontSize: '1rem', fontWeight: 800, color: '#14532d', marginTop: '4px' }}>
+                                {highestPerformer.name}
+                              </div>
+                              <div style={{ fontSize: '0.82rem', color: '#166534', fontWeight: 600 }}>
+                                {highestPerformer.scoreAvg}% average accuracy · {highestPerformer.earnedPoints}/{highestPerformer.totalPoints} pts
+                              </div>
+                            </div>
+                          )}
+
+                          {lowestPerformer && lowestPerformer.scoreAvg < 70 && (
+                            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px', padding: '12px 14px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#b91c1c', fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase' }}>
+                                <Clock3 style={{ width: 14, height: 14 }} /> Requires Support
+                              </div>
+                              <div style={{ fontSize: '1rem', fontWeight: 800, color: '#7f1d1d', marginTop: '4px' }}>
+                                {lowestPerformer.name}
+                              </div>
+                              <div style={{ fontSize: '0.82rem', color: '#991b1b', fontWeight: 600 }}>
+                                {lowestPerformer.scoreAvg}% average accuracy · {lowestPerformer.earnedPoints}/{lowestPerformer.totalPoints} pts
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Filter Tabs */}
+                      <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid #eeeae4', paddingBottom: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setModalStudentTab('all')}
+                          style={{
+                            background: modalStudentTab === 'all' ? '#173e30' : '#f4efe8',
+                            color: modalStudentTab === 'all' ? '#fff' : '#555',
+                            border: 'none',
+                            borderRadius: '8px',
+                            padding: '6px 14px',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          All Students ({studentsList.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setModalStudentTab('highest')}
+                          style={{
+                            background: modalStudentTab === 'highest' ? '#15803d' : '#f4efe8',
+                            color: modalStudentTab === 'highest' ? '#fff' : '#555',
+                            border: 'none',
+                            borderRadius: '8px',
+                            padding: '6px 14px',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Highest Performers ({studentsList.filter((s) => s.totalPoints > 0 && s.scoreAvg >= 80).length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setModalStudentTab('struggling')}
+                          style={{
+                            background: modalStudentTab === 'struggling' ? '#dc2626' : '#f4efe8',
+                            color: modalStudentTab === 'struggling' ? '#fff' : '#555',
+                            border: 'none',
+                            borderRadius: '8px',
+                            padding: '6px 14px',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Struggling Performers ({studentsList.filter((s) => s.totalPoints > 0 && s.scoreAvg < 60).length})
+                        </button>
+                      </div>
+
+                      {/* Roster List */}
+                      <div style={{ display: 'grid', gap: '0.55rem' }}>
+                        {filteredByTab.length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '2rem 1rem', color: '#888', fontSize: '0.84rem' }}>
+                            No students match this category.
+                          </div>
+                        ) : (
+                          filteredByTab.map((st, i) => (
+                            <div
+                              key={st.uid}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                background: '#faf9f6',
+                                border: '1px solid #eae6df',
+                                borderRadius: '12px',
+                                padding: '10px 14px',
+                                gap: '1rem',
+                                flexWrap: 'wrap',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <span style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#e8f1e9', color: '#173e30', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 800 }}>
+                                  #{i + 1}
+                                </span>
+                                <div>
+                                  <b style={{ fontSize: '0.9rem', color: '#222' }}>{st.name}</b>
+                                  <small style={{ display: 'block', color: '#777', fontSize: '0.72rem' }}>
+                                    {st.email || 'No email'} · {st.completedCount} / {classExercises.length} completed
+                                  </small>
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                <div style={{ textAlign: 'right' }}>
+                                  <b style={{ fontSize: '0.95rem', color: st.scoreAvg >= 70 ? '#166534' : st.scoreAvg >= 50 ? '#d97706' : '#991b1b' }}>
+                                    {st.totalPoints > 0 ? `${st.scoreAvg}%` : '—'}
+                                  </b>
+                                  <small style={{ display: 'block', color: '#888', fontSize: '0.72rem' }}>
+                                    {st.earnedPoints} / {st.totalPoints} pts
+                                  </small>
+                                </div>
+                                <span
+                                  style={{
+                                    fontSize: '0.7rem',
+                                    fontWeight: 700,
+                                    padding: '3px 8px',
+                                    borderRadius: 99,
+                                    background: st.totalPoints === 0 ? '#f3f4f6' : st.scoreAvg >= 80 ? '#f0fdf4' : st.scoreAvg >= 60 ? '#fefce8' : '#fef2f2',
+                                    color: st.totalPoints === 0 ? '#6b7280' : st.scoreAvg >= 80 ? '#15803d' : st.scoreAvg >= 60 ? '#a16207' : '#b91c1c',
+                                    border: `1px solid ${st.totalPoints === 0 ? '#e5e7eb' : st.scoreAvg >= 80 ? '#bbf7d0' : st.scoreAvg >= 60 ? '#fef08a' : '#fecaca'}`,
+                                  }}
+                                >
+                                  {st.totalPoints === 0 ? 'No Data' : st.scoreAvg >= 80 ? 'Mastered' : st.scoreAvg >= 60 ? 'On Track' : 'Needs Support'}
+                                </span>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                <DialogFooter style={{ marginTop: '1rem' }}>
+                  <Button variant="outline" onClick={() => setShowStudentMasteryModal(false)}>
+                    Close
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* ── FULL PAGE MODAL: Topic & Subtopic Mastery Insights ── */}
+            <Dialog open={showTopicMasteryModal} onOpenChange={setShowTopicMasteryModal}>
+              <DialogContent className="modal-card" style={{ maxWidth: '840px', width: '92vw', maxHeight: '90vh', overflowY: 'auto' }}>
+                <DialogHeader>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: '#e8f1e9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#173e30' }}>
+                      <BookOpen style={{ width: 16, height: 16 }} />
+                    </div>
+                    <div>
+                      <DialogTitle style={{ fontSize: '1.2rem', fontWeight: 800 }}>Curriculum &amp; Topic Analysis</DialogTitle>
+                      <DialogDescription style={{ fontSize: '0.8rem', color: '#666' }}>
+                        Identify the easiest and hardest concepts across student question submissions.
+                      </DialogDescription>
+                    </div>
+                  </div>
+                </DialogHeader>
+
+                {(() => {
+                  const sortedDesc = [...topicPerformanceList].sort((a, b) => b.accuracy - a.accuracy);
+                  const easiest = sortedDesc[0];
+                  const hardest = sortedDesc[sortedDesc.length - 1];
+
+                  const filteredTopics = topicPerformanceList.filter((t) => {
+                    if (modalTopicTab === 'easiest') return t.accuracy >= 70;
+                    if (modalTopicTab === 'hardest') return t.accuracy < 60;
+                    return true;
+                  }).sort((a, b) => {
+                    if (modalTopicTab === 'hardest') return a.accuracy - b.accuracy;
+                    return b.accuracy - a.accuracy;
+                  });
+
+                  return (
+                    <div style={{ display: 'grid', gap: '1.25rem', marginTop: '0.5rem' }}>
+                      {/* Top Highlights */}
+                      {topicPerformanceList.length > 0 && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.85rem' }}>
+                          {easiest && (
+                            <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '12px 14px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#15803d', fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase' }}>
+                                ★ Highest Performance (Easiest)
+                              </div>
+                              <div style={{ fontSize: '1rem', fontWeight: 800, color: '#14532d', marginTop: '4px' }}>
+                                {easiest.label}
+                              </div>
+                              <div style={{ fontSize: '0.82rem', color: '#166534', fontWeight: 600 }}>
+                                {easiest.accuracy}% accuracy · {easiest.answersCount} answers recorded
+                              </div>
+                            </div>
+                          )}
+
+                          {hardest && (
+                            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px', padding: '12px 14px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#b91c1c', fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase' }}>
+                                ⚠ Needs Reinforcement (Hardest)
+                              </div>
+                              <div style={{ fontSize: '1rem', fontWeight: 800, color: '#7f1d1d', marginTop: '4px' }}>
+                                {hardest.label}
+                              </div>
+                              <div style={{ fontSize: '0.82rem', color: '#991b1b', fontWeight: 600 }}>
+                                {hardest.accuracy}% accuracy · {hardest.answersCount} answers recorded
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Filter Tabs */}
+                      <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid #eeeae4', paddingBottom: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setModalTopicTab('all')}
+                          style={{
+                            background: modalTopicTab === 'all' ? '#173e30' : '#f4efe8',
+                            color: modalTopicTab === 'all' ? '#fff' : '#555',
+                            border: 'none',
+                            borderRadius: '8px',
+                            padding: '6px 14px',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          All Topics ({topicPerformanceList.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setModalTopicTab('easiest')}
+                          style={{
+                            background: modalTopicTab === 'easiest' ? '#15803d' : '#f4efe8',
+                            color: modalTopicTab === 'easiest' ? '#fff' : '#555',
+                            border: 'none',
+                            borderRadius: '8px',
+                            padding: '6px 14px',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          High Mastery Topics ({topicPerformanceList.filter((t) => t.accuracy >= 70).length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setModalTopicTab('hardest')}
+                          style={{
+                            background: modalTopicTab === 'hardest' ? '#dc2626' : '#f4efe8',
+                            color: modalTopicTab === 'hardest' ? '#fff' : '#555',
+                            border: 'none',
+                            borderRadius: '8px',
+                            padding: '6px 14px',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Challenging Topics ({topicPerformanceList.filter((t) => t.accuracy < 60).length})
+                        </button>
+                      </div>
+
+                      {/* Topics List */}
+                      <div style={{ display: 'grid', gap: '0.55rem' }}>
+                        {filteredTopics.length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '2rem 1rem', color: '#888', fontSize: '0.84rem' }}>
+                            No topics match this category.
+                          </div>
+                        ) : (
+                          filteredTopics.map((t, i) => (
+                            <div
+                              key={t.label}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                background: '#faf9f6',
+                                border: '1px solid #eae6df',
+                                borderRadius: '12px',
+                                padding: '12px 14px',
+                                gap: '1rem',
+                                flexWrap: 'wrap',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <span style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#e8f1e9', color: '#173e30', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 800 }}>
+                                  #{i + 1}
+                                </span>
+                                <div>
+                                  <b style={{ fontSize: '0.92rem', color: '#222' }}>{t.label}</b>
+                                  <small style={{ display: 'block', color: '#777', fontSize: '0.72rem' }}>
+                                    {t.answersCount} student responses analyzed · {t.earned}/{t.possible} points earned
+                                  </small>
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                <div style={{ width: '100px', height: '7px', background: '#eeeae4', borderRadius: 99, overflow: 'hidden' }}>
+                                  <div
+                                    style={{
+                                      width: `${t.accuracy}%`,
+                                      height: '100%',
+                                      background: t.accuracy >= 70 ? '#166534' : t.accuracy >= 50 ? '#d97706' : '#991b1b',
+                                      borderRadius: 99,
+                                    }}
+                                  />
+                                </div>
+                                <b style={{ fontSize: '0.95rem', color: t.accuracy >= 70 ? '#166534' : t.accuracy >= 50 ? '#d97706' : '#991b1b', minWidth: '42px', textAlign: 'right' }}>
+                                  {t.accuracy}%
+                                </b>
+                                <span
+                                  style={{
+                                    fontSize: '0.7rem',
+                                    fontWeight: 700,
+                                    padding: '3px 8px',
+                                    borderRadius: 99,
+                                    background: t.accuracy >= 80 ? '#f0fdf4' : t.accuracy >= 60 ? '#fefce8' : '#fef2f2',
+                                    color: t.accuracy >= 80 ? '#15803d' : t.accuracy >= 60 ? '#a16207' : '#b91c1c',
+                                    border: `1px solid ${t.accuracy >= 80 ? '#bbf7d0' : t.accuracy >= 60 ? '#fef08a' : '#fecaca'}`,
+                                    minWidth: '78px',
+                                    textAlign: 'center',
+                                  }}
+                                >
+                                  {t.accuracy >= 80 ? 'Mastered' : t.accuracy >= 60 ? 'Moderate' : 'Challenging'}
+                                </span>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                <DialogFooter style={{ marginTop: '1rem' }}>
+                  <Button variant="outline" onClick={() => setShowTopicMasteryModal(false)}>
+                    Close
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </>
         )}
       </>
