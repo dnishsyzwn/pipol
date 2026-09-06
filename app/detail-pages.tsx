@@ -777,6 +777,7 @@ export function ClassroomsDetail({
     [schoolStage, setSchoolStage] = useState<SchoolStage>('primary'),
     [schoolYear, setSchoolYear] = useState('Tahun 1'),
     [newSubject, setNewSubject] = useState(''),
+    [subjectSearch, setSubjectSearch] = useState(''),
     [customSubject, setCustomSubject] = useState(''),
     [requestingSubject, setRequestingSubject] = useState(false),
     [busy, setBusy] = useState(false),
@@ -784,18 +785,21 @@ export function ClassroomsDetail({
   const count = classes.length;
   const approvedSubjects = useApprovedSubjects(schoolStage, schoolYear);
   const availableSubjects = [...subjectsFor(schoolStage, schoolYear), ...approvedSubjects.map((name) => ({ name, category: 'Admin-approved subjects' }))],
+    filteredSubjects = availableSubjects.filter((subject) => subject.name.toLocaleLowerCase().includes(subjectSearch.trim().toLocaleLowerCase())),
     subjectGroups = [
-      ...new Set(availableSubjects.map((subject) => subject.category)),
+      ...new Set(filteredSubjects.map((subject) => subject.category)),
     ];
   useEffect(() => onCountChange(count), [count, onCountChange]);
   const changeStage = (stage: SchoolStage) => {
     setSchoolStage(stage);
     setSchoolYear(SCHOOL_YEARS[stage][0]);
     setNewSubject('');
+    setSubjectSearch('');
   };
   const changeYear = (year: string) => {
     setSchoolYear(year);
     setNewSubject('');
+    setSubjectSearch('');
   };
   const createClass = async () => {
     if (!newName.trim() || !newSubject || newSubject === OTHER_SUBJECT || classes.length >= 3) return;
@@ -1034,13 +1038,14 @@ export function ClassroomsDetail({
             KPM subject
             <Combobox
               value={newSubject || null}
-              onValueChange={(value) => setNewSubject(String(value || ''))}
-              items={[...availableSubjects.map((subject) => subject.name), OTHER_SUBJECT]}
+              onValueChange={(value) => { setNewSubject(String(value || '')); setSubjectSearch(''); }}
+              items={[...filteredSubjects.map((subject) => subject.name), OTHER_SUBJECT]}
             >
               <ComboboxInput
                 className="curriculum-combobox"
                 placeholder="Search a subject, e.g. Fizik"
                 showClear
+                onChange={(event) => setSubjectSearch(event.target.value)}
               />
               <ComboboxContent>
                 <ComboboxEmpty>
@@ -1050,7 +1055,7 @@ export function ClassroomsDetail({
                   {subjectGroups.map((group) => (
                     <ComboboxGroup key={group}>
                       <ComboboxLabel>{group}</ComboboxLabel>
-                      {availableSubjects
+                    {filteredSubjects
                         .filter((subject) => subject.category === group)
                         .map((subject) => (
                           <ComboboxItem key={subject.name} value={subject.name}>
@@ -1059,10 +1064,10 @@ export function ClassroomsDetail({
                         ))}
                     </ComboboxGroup>
                   ))}
-                  <ComboboxGroup>
+                  {(!subjectSearch.trim() || OTHER_SUBJECT.toLocaleLowerCase().includes(subjectSearch.trim().toLocaleLowerCase())) && <ComboboxGroup>
                     <ComboboxLabel>Can’t find your subject?</ComboboxLabel>
                     <ComboboxItem value={OTHER_SUBJECT}>{OTHER_SUBJECT}</ComboboxItem>
-                  </ComboboxGroup>
+                  </ComboboxGroup>}
                 </ComboboxList>
               </ComboboxContent>
             </Combobox>
