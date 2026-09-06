@@ -1502,10 +1502,16 @@ function TeacherDashboard({
   const requestCustomSubject = async () => {
     const label = cleanTag(customSubject);
     if (label.length < 2) return setSubjectRequestMessage('Enter a valid subject name.');
+    const normalizedLabel = label.toLocaleLowerCase();
+    const alreadyListed = availableSubjects.some((subject) => subject.name.trim().toLocaleLowerCase() === normalizedLabel);
+    if (alreadyListed) {
+      setSubjectRequestMessage('This subject already exists in the list. Please select it instead of requesting a duplicate.');
+      return;
+    }
     setRequestingSubject(true);
     try {
       const id = `${user.uid}-${schoolStage}-${schoolYear}-${tagId('subject', label)}`;
-      await setDoc(doc(db, 'subjectProposals', id), { label, normalizedLabel: label.toLowerCase(), schoolStage, schoolYear, requesterId: user.uid, requesterName: user.displayName || 'Teacher', requesterEmail: user.email || '', status: 'pending', createdAt: serverTimestamp() });
+      await setDoc(doc(db, 'subjectProposals', id), { label, normalizedLabel, schoolStage, schoolYear, requesterId: user.uid, requesterName: user.displayName || 'Teacher', requesterEmail: user.email || '', status: 'pending', createdAt: serverTimestamp() });
       window.localStorage.setItem(`slearn:subject-proposal:${id}`, 'pending');
       setSubjectRequestMessage('Submitted for admin approval. It will appear in the subject list after approval.');
       setCustomSubject('');

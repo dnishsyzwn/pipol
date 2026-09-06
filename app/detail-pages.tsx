@@ -840,11 +840,16 @@ export function ClassroomsDetail({
   const requestCustomSubject = async () => {
     const label = customSubject.trim().replace(/\s+/g, ' ');
     if (label.length < 2) return setMessage('Enter a valid subject name.');
+    const normalizedLabel = label.toLocaleLowerCase();
+    if (availableSubjects.some((subject) => subject.name.trim().toLocaleLowerCase() === normalizedLabel)) {
+      setMessage('This subject already exists in the list. Please select it instead of requesting a duplicate.');
+      return;
+    }
     setRequestingSubject(true);
     setMessage('');
     try {
       await setDoc(doc(db, 'subjectProposals', `${user.uid}-${schoolStage}-${schoolYear}-${subjectId(label)}`), {
-        label, normalizedLabel: label.toLowerCase(), schoolStage, schoolYear,
+        label, normalizedLabel, schoolStage, schoolYear,
         requesterId: user.uid, requesterName: user.displayName || 'Teacher', requesterEmail: user.email || '',
         status: 'pending', createdAt: serverTimestamp(),
       });
