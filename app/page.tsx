@@ -3844,18 +3844,21 @@ function Classroom({
 }
 
 function StudentExerciseRunner({
+  role,
   user,
   classroom,
   exercise,
   onBack,
   onExit,
 }: {
+  role?: Role | null;
   user: User;
   classroom: ClassroomData;
   exercise: any;
   onBack: () => void;
   onExit: () => void;
 }) {
+  const isTeacher = role === 'teacher';
   const rawQuestions: QuestionItem[] = exercise.questions?.length
     ? exercise.questions
     : exercise.question
@@ -3880,6 +3883,8 @@ function StudentExerciseRunner({
   const [totalCorrectState, setTotalCorrectState] = useState(0);
   const [totalWrongState, setTotalWrongState] = useState(0);
   const [checkingExisting, setCheckingExisting] = useState(true);
+  const [allSubmissions, setAllSubmissions] = useState<SubmissionData[]>([]);
+  const [loadingSubmissions, setLoadingSubmissions] = useState(isTeacher);
 
   const dueInfo = formatDeadline(exercise.deadline);
   const totalPoints = rawQuestions.reduce(
@@ -3894,6 +3899,52 @@ function StudentExerciseRunner({
   };
 
   useEffect(() => {
+    if (!isTeacher) return;
+    setLoadingSubmissions(true);
+    const subCol = collection(
+      db,
+      'classrooms',
+      classroom.id,
+      'exercises',
+      exercise.id,
+      'submissions',
+    );
+    const unsub = onSnapshot(
+      subCol,
+      (snap) => {
+        const rawSubs: SubmissionData[] = snap.docs.map(
+          (d) => ({ id: d.id, ...d.data() }) as SubmissionData,
+        );
+        const subsMap = new Map<string, SubmissionData>();
+        rawSubs.forEach((s) => {
+          const key = s.studentId || s.studentEmail || s.id;
+          if (!subsMap.has(key)) {
+            subsMap.set(key, s);
+          } else {
+            const existing = subsMap.get(key)!;
+            if ((s.score || 0) >= (existing.score || 0)) {
+              subsMap.set(key, s);
+            }
+          }
+        });
+        setAllSubmissions(Array.from(subsMap.values()));
+        setLoadingSubmissions(false);
+        setCheckingExisting(false);
+      },
+      (err) => {
+        console.warn('Teacher preview submissions error:', err);
+        setLoadingSubmissions(false);
+        setCheckingExisting(false);
+      },
+    );
+    return () => unsub();
+  }, [isTeacher, classroom.id, exercise.id]);
+
+  useEffect(() => {
+    if (isTeacher) {
+      setCheckingExisting(false);
+      return;
+    }
     let isMounted = true;
     const checkExisting = async () => {
       try {
@@ -3968,10 +4019,10 @@ function StudentExerciseRunner({
     return () => {
       isMounted = false;
     };
-  }, [classroom.id, exercise.id, user.uid]);
+  }, [isTeacher, classroom.id, exercise.id, user.uid]);
 
   const handleAnswer = (text: string) => {
-    if (alreadyCompleted || submitted) return;
+    if (isTeacher || alreadyCompleted || submitted) return;
     setAnswers((prev) => ({ ...prev, [currentIdx]: text }));
   };
 
@@ -3980,9 +4031,10 @@ function StudentExerciseRunner({
     new Date().getTime() > new Date(exercise.deadline).getTime(),
   );
   const allowsLate = exercise.allowLateSubmissions !== false;
-  const isLateLocked = isPastDeadline && !allowsLate;
+  const isLateLocked = !isTeacher && isPastDeadline && !allowsLate;
 
   const submitExercise = async () => {
+    if (isTeacher) return;
     if (alreadyCompleted || submitted) {
       setSubmitError('You have already completed this exercise.');
       return;
@@ -4164,7 +4216,7 @@ function StudentExerciseRunner({
 
   return (
     <AppShell
-      role="student"
+      role={role || 'student'}
       user={user}
       onExit={onExit}
       active="classroom"
@@ -4182,6 +4234,24 @@ function StudentExerciseRunner({
             flexWrap: 'wrap',
           }}
         >
+          {isTeacher && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                background: '#ede9fe',
+                color: '#5b21b6',
+                border: '1px solid #ddd6fe',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                padding: '0.2rem 0.65rem',
+                borderRadius: 99,
+              }}
+            >
+              <Eye style={{ width: 12, height: 12 }} /> Teacher Preview Mode
+            </span>
+          )}
           {dueInfo.formatted && (
             <span
               style={{
@@ -4226,18 +4296,22 @@ function StudentExerciseRunner({
             </span>
           )}
           <span className="sdg-pill">
-            {submitted
-              ? 'Completed'
-              : isLateLocked
-                ? 'Closed'
-                : `Question ${currentIdx + 1} of ${rawQuestions.length}`}
+            {isTeacher
+              ? `Question ${currentIdx + 1} of ${rawQuestions.length}`
+              : submitted
+                ? 'Completed'
+                : isLateLocked
+                  ? 'Closed'
+                  : `Question ${currentIdx + 1} of ${rawQuestions.length}`}
           </span>
         </div>
       </div>
 
       <div className="classroom-title">
         <div>
-          <span className="kicker">Exercise Checkpoint</span>
+          <span className="kicker">
+            {isTeacher ? 'Exercise Preview' : 'Exercise Checkpoint'}
+          </span>
           <h1>{exercise.title}</h1>
           <p>
             {classroom.name} · {classroom.subject}
@@ -4251,9 +4325,9 @@ function StudentExerciseRunner({
             className="animate-spin"
             style={{ width: 32, height: 32, margin: '0 auto 1rem' }}
           />
-          <p>Loading exercise checkpoint…</p>
+          <p>{isTeacher ? 'Loading exercise preview…' : 'Loading exercise checkpoint…'}</p>
         </div>
-      ) : submitted ? (
+      ) : submitted && !isTeacher ? (
         <div
           style={{
             background: '#fff',
@@ -4650,7 +4724,7 @@ function StudentExerciseRunner({
                   Question 0{currentIdx + 1} of 0{rawQuestions.length}
                 </span>
                 <h2 style={{ fontSize: '1.3rem', marginTop: '0.2rem' }}>
-                  Solve the problem
+                  {isTeacher ? 'Question Preview' : 'Solve the problem'}
                 </h2>
               </div>
               <span
@@ -4723,129 +4797,450 @@ function StudentExerciseRunner({
               )}
             </div>
 
-            <label
-              className="form-label"
-              style={{
-                fontSize: '0.9rem',
-                marginBottom: '0.5rem',
-                display: 'block',
-              }}
-            >
-              Your Answer
-              <Textarea
-                rows={4}
-                placeholder="Type your answer or reasoning here..."
-                value={answers[currentIdx] || ''}
-                onChange={(e) => handleAnswer(e.target.value)}
-                style={{
-                  marginTop: '0.4rem',
-                  borderRadius: '14px',
-                  fontSize: '1rem',
-                }}
-              />
-            </label>
-
-            {submitError && (
-              <div
-                style={{
-                  background: '#fde8e8',
-                  color: '#c81e1e',
-                  padding: '0.75rem 1rem',
-                  borderRadius: '12px',
-                  fontSize: '0.8rem',
-                  marginTop: '1rem',
-                }}
-              >
-                {submitError}
-              </div>
-            )}
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginTop: '2rem',
-                paddingTop: '1.5rem',
-                borderTop: '1px solid #eeeae4',
-              }}
-            >
-              <Button
-                variant="outline"
-                disabled={currentIdx === 0}
-                onClick={() => setCurrentIdx((prev) => Math.max(0, prev - 1))}
-              >
-                <ArrowLeft /> Previous
-              </Button>
-              {currentIdx < rawQuestions.length - 1 ? (
-                <Button onClick={() => setCurrentIdx((prev) => prev + 1)}>
-                  Next Question <ArrowRight />
-                </Button>
-              ) : (
-                <Button
-                  onClick={submitExercise}
-                  disabled={submitting}
-                  className="primary-action"
+            {isTeacher ? (
+              <>
+                <div
+                  style={{
+                    background: '#f0fdf4',
+                    border: '1px solid #bbf7d0',
+                    borderRadius: '18px',
+                    padding: '1.25rem 1.5rem',
+                    marginBottom: '1.5rem',
+                  }}
                 >
-                  {submitting ? <LoaderCircle /> : <Check />} Submit Exercise
-                </Button>
-              )}
-            </div>
-          </section>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      color: '#15803d',
+                      fontWeight: 700,
+                      fontSize: '0.8rem',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                      marginBottom: '0.5rem',
+                    }}
+                  >
+                    <CheckCircle2 style={{ width: 16, height: 16, color: '#16a34a' }} />
+                    Correct Answer
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '1rem',
+                      fontWeight: 600,
+                      color: '#14532d',
+                      background: '#fff',
+                      padding: '0.85rem 1.1rem',
+                      borderRadius: '12px',
+                      border: '1px solid #dcfce7',
+                      lineHeight: 1.5,
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {currentQ.answer ? (
+                      currentQ.answer
+                    ) : (
+                      <span style={{ color: '#888', fontStyle: 'italic', fontWeight: 400 }}>
+                        No answer specified for this question.
+                      </span>
+                    )}
+                  </div>
+                </div>
 
-          <aside className="panel class-stats">
-            <span className="kicker">Progress</span>
-            <h2>{progressPct}%</h2>
-            <Progress value={progressPct} />
-            <div
-              style={{ marginTop: '1.5rem', display: 'grid', gap: '0.5rem' }}
-            >
-              {rawQuestions.map((_, i) => (
-                <button
-                  key={i}
-                  onClick={() => setCurrentIdx(i)}
+                <div style={{ marginTop: '1.5rem' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '1rem',
+                      flexWrap: 'wrap',
+                      gap: '8px',
+                    }}
+                  >
+                    <div>
+                      <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>
+                        Student Submissions
+                      </h3>
+                      <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: '#666' }}>
+                        Answers submitted for Question 0{currentIdx + 1}
+                      </p>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <span
+                        style={{
+                          background: '#f1ece5',
+                          padding: '3px 10px',
+                          borderRadius: 99,
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          color: '#444',
+                        }}
+                      >
+                        {allSubmissions.length} submission{allSubmissions.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                  </div>
+
+                  {loadingSubmissions ? (
+                    <div style={{ textAlign: 'center', padding: '2.5rem 1rem', color: '#777' }}>
+                      <LoaderCircle
+                        className="animate-spin"
+                        style={{ width: 22, height: 22, margin: '0 auto 0.5rem' }}
+                      />
+                      <small>Loading student responses…</small>
+                    </div>
+                  ) : allSubmissions.length === 0 ? (
+                    <div
+                      style={{
+                        textAlign: 'center',
+                        padding: '2.5rem 1.5rem',
+                        background: '#fcfbf9',
+                        borderRadius: 16,
+                        border: '1px dashed #ded8cf',
+                        color: '#777',
+                      }}
+                    >
+                      <Users
+                        style={{ width: 32, height: 32, margin: '0 auto 0.6rem', opacity: 0.5 }}
+                      />
+                      <p style={{ margin: 0, fontWeight: 600, color: '#333' }}>
+                        No student answers yet
+                      </p>
+                      <small style={{ display: 'block', marginTop: '0.3rem', color: '#888' }}>
+                        When enrolled students complete this exercise, their responses and grading will appear here.
+                      </small>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gap: '0.75rem' }}>
+                      {allSubmissions.map((sub) => {
+                        const res =
+                          sub.questionResults?.find((r) => r.questionIdx === currentIdx) ||
+                          computeSubmissionStats(sub, exercise).questionResults[currentIdx];
+                        const studentAns = sub.answers?.[currentIdx] ?? res?.studentAnswer ?? '';
+                        const isCorrect = res ? res.isCorrect : false;
+                        const hasAnswered = Boolean(studentAns && studentAns.trim().length > 0);
+
+                        return (
+                          <div
+                            key={sub.id || sub.studentId}
+                            style={{
+                              background: '#fff',
+                              border: '1px solid #eeeae4',
+                              borderRadius: 14,
+                              padding: '0.9rem 1.1rem',
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                marginBottom: '0.5rem',
+                                flexWrap: 'wrap',
+                                gap: '8px',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span
+                                  className="avatar"
+                                  style={{ width: 28, height: 28, fontSize: '0.65rem' }}
+                                >
+                                  {initials(sub.studentName || 'Student')}
+                                </span>
+                                <div>
+                                  <strong style={{ fontSize: '0.85rem' }}>
+                                    {sub.studentName || 'Student'}
+                                  </strong>
+                                  {sub.studentEmail && (
+                                    <span
+                                      style={{
+                                        fontSize: '0.72rem',
+                                        color: '#888',
+                                        marginLeft: '6px',
+                                      }}
+                                    >
+                                      ({sub.studentEmail})
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                {sub.isLate && (
+                                  <span
+                                    style={{
+                                      background: '#fee2e2',
+                                      color: '#b91c1c',
+                                      border: '1px solid #fca5a5',
+                                      fontSize: '0.65rem',
+                                      padding: '1px 5px',
+                                      borderRadius: 4,
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    LATE
+                                  </span>
+                                )}
+                                {hasAnswered ? (
+                                  <span
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 700,
+                                      color: isCorrect ? '#15803d' : '#b91c1c',
+                                      background: isCorrect ? '#f0fdf4' : '#fef2f2',
+                                      border: `1px solid ${isCorrect ? '#bbf7d0' : '#fecaca'}`,
+                                      padding: '2px 8px',
+                                      borderRadius: 99,
+                                    }}
+                                  >
+                                    {isCorrect ? (
+                                      <Check style={{ width: 11, height: 11 }} />
+                                    ) : (
+                                      <X style={{ width: 11, height: 11 }} />
+                                    )}
+                                    {isCorrect ? 'Correct' : 'Needs Review'}
+                                  </span>
+                                ) : (
+                                  <span
+                                    style={{
+                                      fontSize: '0.72rem',
+                                      color: '#888',
+                                      background: '#f3f4f6',
+                                      padding: '2px 8px',
+                                      borderRadius: 99,
+                                    }}
+                                  >
+                                    Not answered
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div
+                              style={{
+                                background: '#fcfbf9',
+                                border: '1px solid #f0ede8',
+                                borderRadius: 10,
+                                padding: '0.7rem 0.9rem',
+                                fontSize: '0.85rem',
+                                color: '#222',
+                                lineHeight: 1.5,
+                              }}
+                            >
+                              {hasAnswered ? (
+                                studentAns
+                              ) : (
+                                <em style={{ color: '#999', fontSize: '0.8rem' }}>
+                                  No answer provided for this question
+                                </em>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    padding: '0.7rem 1rem',
-                    borderRadius: '12px',
-                    border: '1px solid',
-                    borderColor: currentIdx === i ? '#111' : '#eeeae4',
-                    background:
-                      currentIdx === i
-                        ? '#fff'
-                        : answers[i]?.trim()
-                          ? '#eef2ee'
-                          : '#fcfbf9',
-                    cursor: 'pointer',
-                    textAlign: 'left',
+                    marginTop: '2rem',
+                    paddingTop: '1.5rem',
+                    borderTop: '1px solid #eeeae4',
                   }}
                 >
-                  <span
+                  <Button
+                    variant="outline"
+                    disabled={currentIdx === 0}
+                    onClick={() => setCurrentIdx((prev) => Math.max(0, prev - 1))}
+                  >
+                    <ArrowLeft /> Previous Question
+                  </Button>
+                  {currentIdx < rawQuestions.length - 1 ? (
+                    <Button onClick={() => setCurrentIdx((prev) => prev + 1)}>
+                      Next Question <ArrowRight />
+                    </Button>
+                  ) : (
+                    <Button onClick={onBack} className="primary-action">
+                      <Check /> Done Previewing
+                    </Button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <label
+                  className="form-label"
+                  style={{
+                    fontSize: '0.9rem',
+                    marginBottom: '0.5rem',
+                    display: 'block',
+                  }}
+                >
+                  Your Answer
+                  <Textarea
+                    rows={4}
+                    placeholder="Type your answer or reasoning here..."
+                    value={answers[currentIdx] || ''}
+                    onChange={(e) => handleAnswer(e.target.value)}
                     style={{
+                      marginTop: '0.4rem',
+                      borderRadius: '14px',
+                      fontSize: '1rem',
+                    }}
+                  />
+                </label>
+
+                {submitError && (
+                  <div
+                    style={{
+                      background: '#fde8e8',
+                      color: '#c81e1e',
+                      padding: '0.75rem 1rem',
+                      borderRadius: '12px',
                       fontSize: '0.8rem',
-                      fontWeight: currentIdx === i ? 700 : 500,
+                      marginTop: '1rem',
                     }}
                   >
-                    Question 0{i + 1}
-                  </span>
-                  <small style={{ background: difficultyColour(q.difficulty || 'medium'), borderRadius: 999, padding: '2px 6px', textTransform: 'capitalize' }}>{q.difficulty || 'medium'}</small>
-                  {answers[i]?.trim() ? (
-                    <Check
-                      style={{
-                        width: '14px',
-                        height: '14px',
-                        color: '#173e30',
-                      }}
-                    />
+                    {submitError}
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginTop: '2rem',
+                    paddingTop: '1.5rem',
+                    borderTop: '1px solid #eeeae4',
+                  }}
+                >
+                  <Button
+                    variant="outline"
+                    disabled={currentIdx === 0}
+                    onClick={() => setCurrentIdx((prev) => Math.max(0, prev - 1))}
+                  >
+                    <ArrowLeft /> Previous
+                  </Button>
+                  {currentIdx < rawQuestions.length - 1 ? (
+                    <Button onClick={() => setCurrentIdx((prev) => prev + 1)}>
+                      Next Question <ArrowRight />
+                    </Button>
                   ) : (
-                    <span style={{ fontSize: '0.7rem', color: '#888' }}>
-                      Pending
-                    </span>
+                    <Button
+                      onClick={submitExercise}
+                      disabled={submitting}
+                      className="primary-action"
+                    >
+                      {submitting ? <LoaderCircle /> : <Check />} Submit Exercise
+                    </Button>
                   )}
-                </button>
-              ))}
+                </div>
+              </>
+            )}
+          </section>
+
+          <aside className="panel class-stats">
+            <span className="kicker">
+              {isTeacher ? 'Exercise Overview' : 'Progress'}
+            </span>
+            <h2>
+              {isTeacher ? `${rawQuestions.length} Questions` : `${progressPct}%`}
+            </h2>
+            {!isTeacher && <Progress value={progressPct} />}
+            {isTeacher && (
+              <p style={{ fontSize: '0.78rem', color: '#666', margin: '4px 0 0' }}>
+                {allSubmissions.length} student submission{allSubmissions.length !== 1 ? 's' : ''} received
+              </p>
+            )}
+            <div
+              style={{ marginTop: '1.5rem', display: 'grid', gap: '0.5rem' }}
+            >
+              {rawQuestions.map((q, i) => {
+                const correctCount = isTeacher
+                  ? allSubmissions.filter((s) => {
+                      const res =
+                        s.questionResults?.find((r) => r.questionIdx === i) ||
+                        computeSubmissionStats(s, exercise).questionResults[i];
+                      return res?.isCorrect;
+                    }).length
+                  : 0;
+
+                return (
+                  <button
+                    key={i}
+                    onClick={() => setCurrentIdx(i)}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '0.7rem 1rem',
+                      borderRadius: '12px',
+                      border: '1px solid',
+                      borderColor: currentIdx === i ? '#111' : '#eeeae4',
+                      background:
+                        currentIdx === i
+                          ? '#fff'
+                          : !isTeacher && answers[i]?.trim()
+                            ? '#eef2ee'
+                            : '#fcfbf9',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <div>
+                      <span
+                        style={{
+                          fontSize: '0.8rem',
+                          fontWeight: currentIdx === i ? 700 : 500,
+                          display: 'block',
+                        }}
+                      >
+                        Question 0{i + 1}
+                      </span>
+                      {isTeacher && allSubmissions.length > 0 && (
+                        <span style={{ fontSize: '0.7rem', color: '#777' }}>
+                          {correctCount}/{allSubmissions.length} correct
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <small
+                        style={{
+                          background: difficultyColour(q.difficulty || 'medium'),
+                          borderRadius: 999,
+                          padding: '2px 6px',
+                          textTransform: 'capitalize',
+                        }}
+                      >
+                        {q.difficulty || 'medium'}
+                      </small>
+                      {!isTeacher &&
+                        (answers[i]?.trim() ? (
+                          <Check
+                            style={{
+                              width: '14px',
+                              height: '14px',
+                              color: '#173e30',
+                            }}
+                          />
+                        ) : (
+                          <span style={{ fontSize: '0.7rem', color: '#888' }}>
+                            Pending
+                          </span>
+                        ))}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </aside>
         </div>
@@ -5700,6 +6095,7 @@ export default function Home() {
   if (view === 'exercise' && selectedClass && selectedExercise)
     return (
       <StudentExerciseRunner
+        role={role}
         user={user}
         classroom={selectedClass}
         exercise={selectedExercise}
