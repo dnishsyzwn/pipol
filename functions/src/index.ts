@@ -253,14 +253,21 @@ export const processQuizGenerationJob = onDocumentCreated(
         questionTypes: (settings.questionTypes as string[]) ?? ['multiple_choice', 'short_answer'],
         learningObjectives: (settings.learningObjectives as string[]) ?? [],
         imageMode: String(settings.imageMode ?? 'none') as 'none' | 'upload' | 'generate',
+        imageCount: Number(settings.imageMode === 'generate' ? settings.imageCount ?? 0 : 0),
         existingTags,
       });
       const parsed = GeneratedQuizSchema.parse(generated);
-      const questions = validateQuestionSet(parsed.questions.slice(0, Number(settings.questionCount))).map((question) => ({
-        ...question,
-        id: question.id || randomUUID(),
-        needsReview: question.needsReview || markSensitiveReview(`${question.question} ${question.explanation}`),
-      }));
+      const questions = validateQuestionSet(parsed.questions.slice(0, Number(settings.questionCount))).map((question) => {
+        // A model must not be able to smuggle in a phantom diagram reference.
+        // Visual metadata is attached below only after an image quota reservation
+        // has produced a real asset for that question.
+        const { visual: _modelVisual, ...questionWithoutVisual } = question;
+        return {
+          ...questionWithoutVisual,
+          id: question.id || randomUUID(),
+          needsReview: question.needsReview || markSensitiveReview(`${question.question} ${question.explanation}`),
+        } as QuizQuestion;
+      });
       const draftRef = db.collection('quizDrafts').doc();
       const requestedImages = settings.imageMode === 'generate' ? Math.min(Number(settings.imageCount ?? 0), questions.length) : 0;
       let generatedImages = 0;
