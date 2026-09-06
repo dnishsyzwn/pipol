@@ -48,7 +48,7 @@ function fixture() {
   store.set('classrooms/class', { teacherId: 'teacher', subject: 'Mathematics' });
   store.set('classrooms/class/exercises/previous', { title: 'Algebra', questions: [{ question: 'Calculate 1+1', answer: '2', topic: 'Algebra' }] });
   for (const [uid, mark] of [['strong', 6], ['strong2', 9], ['weak', 2], ['missing', null]]) {
-    store.set(`classrooms/class/members/${uid}`, { status: 'active' });
+    store.set(`classrooms/class/members/${uid}`, uid === 'weak' ? { name: uid } : { status: 'active' });
     if (mark !== null) store.set(`classrooms/class/exercises/previous/submissions/${uid}`, { studentId: uid, studentName: uid, questionResults: [{ topic: 'Algebra', pointsPossible: 10, pointsEarned: mark }] });
   }
 }

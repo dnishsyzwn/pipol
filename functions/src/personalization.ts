@@ -4,7 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import { db } from './firebase.js';
 import { providerSecrets } from './config.js';
-import { requireTeacher, requireAuth, requireClassroomOwner, requireClassroomMember } from './auth.js';
+import { requireTeacher, requireAuth, requireClassroomOwner } from './auth.js';
 import { failed, denied } from './errors.js';
 import { generateQuiz } from './provider.js';
 import { GeneratedQuizSchema, removeUndefinedValues, validateQuestionSet } from './schemas.js';
@@ -18,6 +18,12 @@ const questionSchema = z.object({ id: z.string().max(160), question: z.string().
 type Question = z.infer<typeof questionSchema>;
 type Variant = { key: string; label: string; studentId: string | null; percentage: number | null; weakTopics: string[]; questions: Question[] };
 
+async function requireExerciseMember(classroomId: string, uid: string) {
+  const member = await db.collection('classrooms').doc(classroomId).collection('members').doc(uid).get();
+  // Existing approved memberships omit status; mirror the classroom rules.
+  if (!member.exists || (member.get('status') !== undefined && member.get('status') !== 'active')) denied('You are not a member of this classroom.');
+}
+
 export const generatePersonalizedExercise = onCall({ region: 'asia-southeast1', enforceAppCheck: true, secrets: providerSecrets, timeoutSeconds: 540, memory: '1GiB' }, async request => {
   const auth = await requireTeacher(request);
   const input = inputSchema.parse(request.data);
@@ -26,15 +32,16 @@ export const generatePersonalizedExercise = onCall({ region: 'asia-southeast1', 
   const classroom = db.collection('classrooms').doc(input.classroomId);
   const source = await classroom.collection('exercises').doc(input.sourceId).get();
   if (!source.exists) failed('Choose an existing exercise in this classroom.');
-  const members = await classroom.collection('members').where('status', '==', 'active').get();
+  const members = await classroom.collection('members').get();
   const submissions = await source.ref.collection('submissions').get();
   const variants: Variant[] = [];
   const assignments: Record<string, string> = {};
   const skipped: string[] = [];
   for (const member of members.docs) {
+    if (member.get('status') !== undefined && member.get('status') !== 'active') continue;
     const sub = submissions.docs.find(s => s.id === member.id) || submissions.docs.find(s => s.get('studentId') === member.id);
     const plan = planStudent(sub?.get('questionResults') || [], input.questionCount);
-    if (!plan) { skipped.push(String(member.get('displayName') || member.get('studentName') || member.id)); continue; }
+    if (!plan) { skipped.push(String(member.get('name') || member.get('displayName') || member.get('studentName') || member.id)); continue; }
     assignments[member.id] = plan.targeted ? member.id : 'shared';
     if (plan.targeted) variants.push({ key: member.id, studentId: member.id, label: String(sub?.get('studentName') || 'Student'), percentage: plan.percentage, weakTopics: plan.weakTopics, questions: [] });
   }
@@ -108,7 +115,7 @@ export const getPersonalizedQuestions = onCall({ region: 'asia-southeast1', enfo
   const exercise = await db.collection('classrooms').doc(input.classroomId).collection('exercises').doc(input.exerciseId).get();
   if (!exercise.exists || !exercise.get('personalized')) failed('Exercise unavailable.');
   const teacher = exercise.get('teacherId') === auth.uid;
-  if (!teacher) await requireClassroomMember(input.classroomId, auth.uid);
+  if (!teacher) await requireExerciseMember(input.classroomId, auth.uid);
   const draft = await db.collection('personalizedDrafts').doc(exercise.get('personalizedDraftId')).get();
   const variants = draft.get('variants') as Variant[];
   const variant = teacher ? variants[0] : variants.find(v => v.key === draft.get('assignments')?.[auth.uid]);
@@ -119,7 +126,7 @@ export const getPersonalizedQuestions = onCall({ region: 'asia-southeast1', enfo
 export const submitPersonalizedExercise = onCall({ region: 'asia-southeast1', enforceAppCheck: true }, async request => {
   const auth = requireAuth(request);
   const input = z.object({ classroomId: id, exerciseId: id, answers: z.record(z.string(), z.string().max(12000)) }).parse(request.data);
-  await requireClassroomMember(input.classroomId, auth.uid);
+  await requireExerciseMember(input.classroomId, auth.uid);
   const exerciseRef = db.collection('classrooms').doc(input.classroomId).collection('exercises').doc(input.exerciseId);
   const exercise = await exerciseRef.get();
   if (!exercise.exists || !exercise.get('personalized')) failed('Exercise unavailable.');
