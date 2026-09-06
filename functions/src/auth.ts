@@ -20,6 +20,14 @@ export async function requireTeacher(request: CallableRequest<unknown>): Promise
   return auth;
 }
 
+export async function requireAdmin(request: CallableRequest<unknown>): Promise<AuthContext> {
+  const auth = requireAuth(request);
+  const profile = await db.collection('users').doc(auth.uid).get();
+  const role = profile.get('role') ?? auth.token.role;
+  if (role !== 'admin') denied('Only administrators can use this action.');
+  return auth;
+}
+
 export async function requireClassroomOwner(classroomId: string, uid: string): Promise<void> {
   if (!classroomId || classroomId.length > 160) invalid('A valid classroom is required.');
   const classroom = await db.collection('classrooms').doc(classroomId).get();
