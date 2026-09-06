@@ -12,6 +12,7 @@ const montserrat = Montserrat({
 export const metadata: Metadata = {
   title: 'SLearn — Learn Your Way',
   description: 'A focused learning space for teachers and students.',
+  manifest: '/manifest.webmanifest',
 };
 
 export default function RootLayout({

@@ -380,6 +380,56 @@ function useOnlineStatus(): boolean {
   return isOnline;
 }
 
+const OFFLINE_DB = 'slearn-offline-v1';
+function openOfflineDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(OFFLINE_DB, 1);
+    request.onupgradeneeded = () => { request.result.createObjectStore('exercises', { keyPath: 'key' }); };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function cacheOfflineExercise(classroomId: string, exercise: unknown) {
+  if (typeof indexedDB === 'undefined') return;
+  const db = await openOfflineDb();
+  await new Promise<void>((resolve, reject) => { const tx = db.transaction('exercises', 'readwrite'); tx.objectStore('exercises').put({ key: `${classroomId}:${(exercise as { id: string }).id}`, classroomId, exercise }); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); });
+  db.close();
+}
+export function useOfflineExercisePack(user: User | null, role: Role | null) {
+  useEffect(() => {
+    if (!user || role !== 'student' || typeof window === 'undefined') return;
+    const cachePack = async () => {
+      if (!navigator.onLine) return;
+      try {
+        const memberships = await getDocs(collection(db, 'users', user.uid, 'memberships'));
+        await Promise.all(memberships.docs.map(async (membership) => {
+          const classroomId = membership.id;
+          const exercises = await getDocs(collection(db, 'classrooms', classroomId, 'exercises'));
+          await Promise.all(exercises.docs.map((exercise) => cacheOfflineExercise(classroomId, { id: exercise.id, ...exercise.data() })));
+        }));
+      } catch { /* Firestore persistence remains the fallback when a pack cannot refresh. */ }
+    };
+    const syncQueuedSubmissions = async () => {
+      if (!navigator.onLine) return;
+      const key = `slearn:offline-submissions:${user.uid}`;
+      const queued = JSON.parse(window.localStorage.getItem(key) || '[]') as Array<{ classroomId: string; exerciseId: string; answers: Record<number, string> }>;
+      if (!queued.length) return;
+      const remaining = [];
+      for (const item of queued) {
+        try { await httpsCallable(functions, 'submitPersonalizedExercise')(item); } catch { remaining.push(item); }
+      }
+      if (remaining.length) window.localStorage.setItem(key, JSON.stringify(remaining));
+      else window.localStorage.removeItem(key);
+    };
+    void cachePack();
+    void syncQueuedSubmissions();
+    const handleOnline = () => { void cachePack(); void syncQueuedSubmissions(); };
+    window.addEventListener('online', handleOnline);
+    void navigator.serviceWorker?.register('/sw.js').catch(() => undefined);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [user, role]);
+}
+
 function useApprovedSubjects(stage: SchoolStage, year: string) {
   const [subjects, setSubjects] = useState<string[]>([]);
   useEffect(() => onSnapshot(collection(db, 'subjectCatalog'), (snapshot) => {
@@ -6069,7 +6119,14 @@ function StudentExerciseRunnerContent({
       setIsLateSubmission(isLate);
 
       // Save using user.uid as document ID so each student has strictly one submission
-      if (exercise.personalized) {
+      if (exercise.personalized && typeof navigator !== 'undefined' && !navigator.onLine) {
+        const queueKey = `slearn:offline-submissions:${user.uid}`;
+        const queued = JSON.parse(window.localStorage.getItem(queueKey) || '[]') as unknown[];
+        queued.push({ classroomId: classroom.id, exerciseId: exercise.id, answers });
+        window.localStorage.setItem(queueKey, JSON.stringify(queued));
+        setMyQuestionResults(questionResults);
+        setSubmitError('Saved offline. Your result will be sent automatically when connection returns.');
+      } else if (exercise.personalized) {
         const response = await httpsCallable(functions, 'submitPersonalizedExercise')({ classroomId: classroom.id, exerciseId: exercise.id, answers });
         const result = response.data as { score: number; totalCorrect: number; totalWrong: number; questionResults: QuestionResult[] };
         setEarnedScore(result.score);
@@ -8868,6 +8925,8 @@ export default function Home() {
     [, setProfileVersion] = useState(0),
     [resetPasswordCode, setResetPasswordCode] = useState<string | null>(null),
     [navigationReady, setNavigationReady] = useState(false);
+
+  useOfflineExercisePack(user, role);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
