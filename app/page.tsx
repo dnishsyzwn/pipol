@@ -1052,6 +1052,7 @@ function TeacherDashboard({
     [schoolStage, setSchoolStage] = useState<SchoolStage>('primary'),
     [schoolYear, setSchoolYear] = useState('Tahun 1'),
     [newSubject, setNewSubject] = useState(''),
+    [subjectSearch, setSubjectSearch] = useState(''),
     [customSubject, setCustomSubject] = useState(''),
     [subjectRequestMessage, setSubjectRequestMessage] = useState(''),
     [requestingSubject, setRequestingSubject] = useState(false),
@@ -1073,7 +1074,8 @@ function TeacherDashboard({
   const approvedSubjects = useApprovedSubjects(schoolStage, schoolYear);
   const approvedEditSubjects = useApprovedSubjects(editSchoolStage, editSchoolYear);
   const availableSubjects = [...subjectsFor(schoolStage, schoolYear), ...approvedSubjects.map((name) => ({ name, category: 'Admin-approved subjects' }))];
-  const subjectGroups = [...new Set(availableSubjects.map((subject) => subject.category))];
+  const filteredSubjects = availableSubjects.filter((subject) => subject.name.toLocaleLowerCase().includes(subjectSearch.trim().toLocaleLowerCase()));
+  const subjectGroups = [...new Set(filteredSubjects.map((subject) => subject.category))];
   const editAvailableSubjects = [...subjectsFor(editSchoolStage, editSchoolYear), ...approvedEditSubjects.map((name) => ({ name, category: 'Admin-approved subjects' }))];
   const editSubjectGroups = [...new Set(editAvailableSubjects.map((subject) => subject.category))];
   const requestCustomSubject = async () => {
@@ -1543,6 +1545,7 @@ function TeacherDashboard({
                       setSchoolStage(stage);
                       setSchoolYear(SCHOOL_YEARS[stage][0]);
                       setNewSubject('');
+                      setSubjectSearch('');
                     }}
                   >
                     {SCHOOL_STAGES.map((stage) => (
@@ -1560,6 +1563,7 @@ function TeacherDashboard({
                     onChange={(e) => {
                       setSchoolYear(e.target.value);
                       setNewSubject('');
+                      setSubjectSearch('');
                     }}
                   >
                     {SCHOOL_YEARS[schoolStage].map((year) => (
@@ -1574,13 +1578,14 @@ function TeacherDashboard({
                 KPM subject
                 <Combobox
                   value={newSubject || null}
-                  onValueChange={(value) => setNewSubject(String(value || ''))}
-                  items={[...availableSubjects.map((subject) => subject.name), OTHER_SUBJECT]}
+                  onValueChange={(value) => { setNewSubject(String(value || '')); setSubjectSearch(''); }}
+                  items={[...filteredSubjects.map((subject) => subject.name), OTHER_SUBJECT]}
                 >
                   <ComboboxInput
-                    className="curriculum-combobox"
-                    placeholder="Search a subject, e.g. Fizik"
-                    showClear
+                  className="curriculum-combobox"
+                  placeholder="Search a subject, e.g. Fizik"
+                  showClear
+                  onChange={(event) => setSubjectSearch(event.target.value)}
                   />
                   <ComboboxContent>
                     <ComboboxEmpty>No matching subject for this level.</ComboboxEmpty>
@@ -1588,7 +1593,7 @@ function TeacherDashboard({
                       {subjectGroups.map((group) => (
                         <ComboboxGroup key={group}>
                           <ComboboxLabel>{group}</ComboboxLabel>
-                          {availableSubjects
+                      {filteredSubjects
                             .filter((subject) => subject.category === group)
                             .map((subject) => (
                               <ComboboxItem key={subject.name} value={subject.name}>
@@ -1597,10 +1602,10 @@ function TeacherDashboard({
                             ))}
                         </ComboboxGroup>
                       ))}
-                      <ComboboxGroup>
-                        <ComboboxLabel>Can’t find your subject?</ComboboxLabel>
-                        <ComboboxItem value={OTHER_SUBJECT}>{OTHER_SUBJECT}</ComboboxItem>
-                      </ComboboxGroup>
+                  {(!subjectSearch.trim() || OTHER_SUBJECT.toLocaleLowerCase().includes(subjectSearch.trim().toLocaleLowerCase())) && <ComboboxGroup>
+                    <ComboboxLabel>Can’t find your subject?</ComboboxLabel>
+                    <ComboboxItem value={OTHER_SUBJECT}>{OTHER_SUBJECT}</ComboboxItem>
+                  </ComboboxGroup>}
                     </ComboboxList>
                   </ComboboxContent>
                 </Combobox>
