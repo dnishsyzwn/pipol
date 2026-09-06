@@ -153,6 +153,9 @@ type QuestionItem = {
   id: string;
   question: string;
   answer: string;
+  type?: 'short_answer' | 'multiple_choice';
+  choices?: string[];
+  markingMode?: 'automatic' | 'manual';
   points: number;
   enhanced: boolean;
   difficulty?: Difficulty;
@@ -176,6 +179,7 @@ type QuestionResult = {
   subtopic?: string;
   skills: string[];
   teacherRemarked?: boolean;
+  pendingReview?: boolean;
   remarkedAt?: string;
 };
 type SubmissionData = {
@@ -6026,8 +6030,9 @@ function StudentExerciseRunner({
         const pts = Number(q.points) || 1;
         let earned = 0;
         let isCorrect = false;
+        const manualReview = q.type !== 'multiple_choice' && q.markingMode === 'manual';
 
-        if (
+        if (!manualReview &&
           userALow &&
           expALow &&
           (userALow === expALow ||
@@ -6038,7 +6043,7 @@ function StudentExerciseRunner({
           isCorrect = true;
           correctCount++;
         } else {
-          wrongCount++;
+          if (!manualReview) wrongCount++;
           if (userALow.length > 0) {
             earned = Math.max(1, Math.round(pts * 0.5));
           }
@@ -6057,6 +6062,7 @@ function StudentExerciseRunner({
           topic: q.topic || 'General',
           subtopic: q.subtopic || '',
           skills: Array.isArray(q.skills) ? q.skills : [],
+          pendingReview: manualReview,
         });
       });
 
@@ -7436,7 +7442,16 @@ function StudentExerciseRunner({
               </>
             ) : (
               <>
-                <label
+                {currentQ.type === 'multiple_choice' ? (
+                  <div style={{ display: 'grid', gap: '0.65rem', marginBottom: '1rem' }}>
+                    {(currentQ.choices || []).map((choice) => (
+                      <label key={choice} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '0.8rem 1rem', border: '1px solid #eeeae4', borderRadius: '12px', cursor: submitted || alreadyCompleted ? 'default' : 'pointer' }}>
+                        <input type="radio" name={`question-${currentIdx}`} value={choice} checked={(answers[currentIdx] || '') === choice} onChange={(event) => handleAnswer(event.target.value)} disabled={submitted || alreadyCompleted} />
+                        <span>{choice}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : <label
                   className="form-label"
                   style={{
                     fontSize: '0.9rem',
@@ -7456,7 +7471,7 @@ function StudentExerciseRunner({
                       fontSize: '1rem',
                     }}
                   />
-                </label>
+                </label>}
 
                 {submitError && (
                   <div
@@ -7679,6 +7694,9 @@ function QuizBuilder({
         id: q.id || String(idx + 1),
         question: q.question || '',
         answer: q.answer || '',
+        type: q.type === 'multiple_choice' ? 'multiple_choice' : 'short_answer',
+        choices: Array.isArray(q.choices) ? q.choices : [],
+        markingMode: q.markingMode === 'manual' ? 'manual' : 'automatic',
         points: Number(q.points) || 2,
         enhanced: Boolean(q.enhanced),
         difficulty: q.difficulty || 'medium',
@@ -7695,6 +7713,9 @@ function QuizBuilder({
           id: '1',
           question: initialExercise.question,
           answer: initialExercise.answer || '',
+          type: 'short_answer',
+          choices: [],
+          markingMode: 'automatic',
           points: 2,
           enhanced: Boolean(initialExercise.enhanced),
           difficulty: 'medium',
@@ -7709,6 +7730,9 @@ function QuizBuilder({
         id: '1',
         question: 'Solve for x: 3x + 5 = 20.',
         answer: 'x = 5',
+        type: 'short_answer',
+        choices: [],
+        markingMode: 'automatic',
         points: 2,
         enhanced: false,
         topic: '',
@@ -7757,6 +7781,9 @@ function QuizBuilder({
         id: Math.random().toString(36).slice(2, 9),
         question: '',
         answer: '',
+        type: 'short_answer',
+        choices: [],
+        markingMode: 'automatic',
         points: 2,
         enhanced: false,
         topic: '',
@@ -7830,9 +7857,9 @@ function QuizBuilder({
         }, reject);
       });
       const draft = await getDoc(doc(db, 'quizDrafts', String(job.draftId)));
-      const generated = (draft.data()?.questions ?? [])[0] as { question?: string; correctAnswer?: string; difficulty?: Difficulty; topic?: string; subtopic?: string; skills?: string[]; tagIds?: string[]; taggingConfidence?: 'high' | 'medium' | 'low' } | undefined;
+      const generated = (draft.data()?.questions ?? [])[0] as { question?: string; correctAnswer?: string; type?: 'multiple_choice' | 'short_answer'; choices?: string[]; difficulty?: Difficulty; topic?: string; subtopic?: string; skills?: string[]; tagIds?: string[]; taggingConfidence?: 'high' | 'medium' | 'low' } | undefined;
       if (!generated?.question) throw new Error('No question was generated. Please try again.');
-      setQuestions((current) => current.map((question, index) => index === quickGenerateIndex ? { ...question, question: generated.question || '', answer: generated.correctAnswer || '', difficulty: generated.difficulty, topic: generated.topic || '', subtopic: generated.subtopic || '', skills: generated.skills || [], tagIds: generated.tagIds || [], taggingConfidence: generated.taggingConfidence, enhanced: true } : question));
+      setQuestions((current) => current.map((question, index) => index === quickGenerateIndex ? { ...question, question: generated.question || '', answer: generated.correctAnswer || '', type: generated.type === 'multiple_choice' ? 'multiple_choice' : 'short_answer', choices: generated.choices || [], markingMode: generated.type === 'multiple_choice' ? 'automatic' : question.markingMode || 'automatic', difficulty: generated.difficulty, topic: generated.topic || '', subtopic: generated.subtopic || '', skills: generated.skills || [], tagIds: generated.tagIds || [], taggingConfidence: generated.taggingConfidence, enhanced: true } : question));
       setQuickGenerateIndex(null);
       setQuickPrompt('');
     } catch (error) {
@@ -7889,8 +7916,8 @@ function QuizBuilder({
         }, reject);
       });
       const draft = await getDoc(doc(db, 'quizDrafts', String(job.draftId)));
-      const generated = (draft.data()?.questions ?? []) as Array<{ id?: string; question: string; correctAnswer: string; difficulty?: Difficulty; topic?: string; subtopic?: string; skills?: string[]; tagIds?: string[]; taggingConfidence?: 'high' | 'medium' | 'low' }>;
-      setQuestions(generated.map((question, index) => ({ id: question.id || `ai-${index}`, question: question.question, answer: question.correctAnswer, points: 2, enhanced: true, difficulty: question.difficulty, topic: question.topic || '', subtopic: question.subtopic || '', skills: question.skills || [], tagIds: question.tagIds || [], taggingConfidence: question.taggingConfidence })));
+      const generated = (draft.data()?.questions ?? []) as Array<{ id?: string; question: string; correctAnswer: string; type?: 'multiple_choice' | 'short_answer'; choices?: string[]; difficulty?: Difficulty; topic?: string; subtopic?: string; skills?: string[]; tagIds?: string[]; taggingConfidence?: 'high' | 'medium' | 'low' }>;
+      setQuestions(generated.map((question, index) => ({ id: question.id || `ai-${index}`, question: question.question, answer: question.correctAnswer, type: question.type === 'multiple_choice' ? 'multiple_choice' : 'short_answer', choices: question.choices || [], markingMode: question.type === 'multiple_choice' ? 'automatic' : 'automatic', points: 2, enhanced: true, difficulty: question.difficulty, topic: question.topic || '', subtopic: question.subtopic || '', skills: question.skills || [], tagIds: question.tagIds || [], taggingConfidence: question.taggingConfidence })));
       if (!title.trim() && draft.data()?.title) setTitle(String(draft.data()?.title));
       const inferredLevel = String(draft.data()?.level || 'General education');
       toast.close(loadingToastId);
@@ -7927,6 +7954,9 @@ function QuizBuilder({
         answer: q.answer.trim(),
         points: q.points,
         enhanced: q.enhanced,
+        type: q.type || 'short_answer',
+        choices: q.type === 'multiple_choice' ? (q.choices || []).map(cleanTag).filter(Boolean) : undefined,
+        markingMode: q.type === 'multiple_choice' ? 'automatic' : (q.markingMode || 'automatic'),
         difficulty: q.difficulty || 'medium',
         topic: cleanTag(q.topic) || 'General',
         subtopic: cleanTag(q.subtopic),
@@ -8524,6 +8554,26 @@ function QuizBuilder({
                 )}
               </div>
               <label className="form-label">
+                Question type
+                <select value={q.type || 'short_answer'} onChange={(event) => { const type = event.target.value as 'short_answer' | 'multiple_choice'; updateQuestion(idx, 'type', type); if (type === 'multiple_choice') updateQuestion(idx, 'markingMode', 'automatic'); }} style={{ width: '100%', height: 40, border: '1px solid #dce5dc', borderRadius: 10, padding: '0 .75rem', background: '#fff' }}>
+                  <option value="short_answer">Type your answer</option>
+                  <option value="multiple_choice">Multiple choice (MCQ)</option>
+                </select>
+              </label>
+              {q.type === 'multiple_choice' ? (
+                <div className="answer-block">
+                  <label className="form-label">Choices<Input value={(q.choices || []).join(', ')} onChange={(event) => updateQuestion(idx, 'choices', event.target.value.split(',').map(cleanTag).filter(Boolean).slice(0, 8))} placeholder="Option A, Option B, Option C" /></label>
+                  <label className="form-label">Correct choice<select value={q.answer} onChange={(event) => updateQuestion(idx, 'answer', event.target.value)} style={{ width: '100%', height: 40, border: '1px solid #dce5dc', borderRadius: 10, padding: '0 .75rem', background: '#fff' }}><option value="">Select correct choice</option>{(q.choices || []).map((choice) => <option key={choice} value={choice}>{choice}</option>)}</select></label>
+                </div>
+              ) : (
+                <label className="form-label">
+                  Marking method
+                  <select value={q.markingMode || 'automatic'} onChange={(event) => updateQuestion(idx, 'markingMode', event.target.value)} style={{ width: '100%', height: 40, border: '1px solid #dce5dc', borderRadius: 10, padding: '0 .75rem', background: '#fff' }}>
+                    <option value="automatic">Automatic marking</option>
+                    <option value="manual">Teacher marks manually</option>
+                  </select>
+                </label>)}
+              {q.type !== 'multiple_choice' && <label className="form-label">
                 Question text
                 <Textarea
                   value={q.question}
@@ -8533,8 +8583,9 @@ function QuizBuilder({
                   placeholder="Type question prompt..."
                   className="question-text"
                 />
-              </label>
-              <div className="answer-block">
+              </label>}
+              {q.type === 'multiple_choice' && <label className="form-label">Question text<Textarea value={q.question} onChange={(e) => updateQuestion(idx, 'question', e.target.value)} placeholder="Type the question prompt..." className="question-text" /></label>}
+              {q.type !== 'multiple_choice' && <div className="answer-block">
                 <label className="form-label">
                   Answer
                   <Input
@@ -8556,7 +8607,7 @@ function QuizBuilder({
                     }
                   />
                 </label>
-              </div>
+              </div>}
               <div className="question-tag-editor">
                 <div className="question-tag-head"><div><b>Learning tags</b><small>Use a specific chapter or concept so performance reports stay useful.</small></div>{q.taggingConfidence && <span>{q.taggingConfidence} AI confidence</span>}</div>
                 <div className="question-tag-grid">
