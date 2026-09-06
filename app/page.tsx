@@ -1086,10 +1086,37 @@ function TeacherDashboard({
     try {
       const id = `${user.uid}-${schoolStage}-${schoolYear}-${tagId('subject', label)}`;
       await setDoc(doc(db, 'subjectProposals', id), { label, normalizedLabel: label.toLowerCase(), schoolStage, schoolYear, requesterId: user.uid, requesterName: user.displayName || 'Teacher', requesterEmail: user.email || '', status: 'pending', createdAt: serverTimestamp() });
+      window.localStorage.setItem(`slearn:subject-proposal:${id}`, 'pending');
       setSubjectRequestMessage('Submitted for admin approval. It will appear in the subject list after approval.');
       setCustomSubject('');
     } catch (error) { setSubjectRequestMessage(friendlyError(error)); } finally { setRequestingSubject(false); }
   };
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      query(collection(db, 'subjectProposals'), where('requesterId', '==', user.uid)),
+      (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          const proposal = change.doc.data();
+          if (proposal.status !== 'approved' && proposal.status !== 'rejected') return;
+          const key = `slearn:subject-proposal:${change.doc.id}`;
+          const previousStatus = window.localStorage.getItem(key);
+          if (previousStatus === proposal.status) return;
+          window.localStorage.setItem(key, String(proposal.status));
+          const approved = proposal.status === 'approved';
+          toast.add({
+            title: approved ? 'Subject request approved' : 'Subject request declined',
+            description: approved
+              ? `${String(proposal.label || 'Your subject')} is now available in the subject dropdown.`
+              : `${String(proposal.label || 'Your subject')} was not added. You can submit a revised request.`,
+            type: approved ? 'success' : 'warning',
+            timeout: 9000,
+          });
+        });
+      },
+    );
+    return () => unsubscribe();
+  }, [user.uid]);
 
   useEffect(
     () =>

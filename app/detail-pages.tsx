@@ -848,6 +848,7 @@ export function ClassroomsDetail({
         requesterId: user.uid, requesterName: user.displayName || 'Teacher', requesterEmail: user.email || '',
         status: 'pending', createdAt: serverTimestamp(),
       });
+      window.localStorage.setItem(`slearn:subject-proposal:${user.uid}-${schoolStage}-${schoolYear}-${subjectId(label)}`, 'pending');
       setCustomSubject('');
       setMessage('Submitted for admin approval. It will appear here once approved.');
     } catch {
