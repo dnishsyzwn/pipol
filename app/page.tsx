@@ -65,7 +65,9 @@ import {
   Plus,
   Search,
   Send,
+  Shuffle,
   Sparkles,
+  Timer,
   Trash2,
   Unlock,
   Users,
@@ -173,6 +175,8 @@ type QuestionResult = {
   topic: string;
   subtopic?: string;
   skills: string[];
+  teacherRemarked?: boolean;
+  remarkedAt?: string;
 };
 type SubmissionData = {
   id: string;
@@ -1515,10 +1519,16 @@ function TeacherDashboard({
   const requestCustomSubject = async () => {
     const label = cleanTag(customSubject);
     if (label.length < 2) return setSubjectRequestMessage('Enter a valid subject name.');
+    const normalizedLabel = label.toLocaleLowerCase();
+    const alreadyListed = availableSubjects.some((subject) => subject.name.trim().toLocaleLowerCase() === normalizedLabel);
+    if (alreadyListed) {
+      setSubjectRequestMessage('This subject already exists in the list. Please select it instead of requesting a duplicate.');
+      return;
+    }
     setRequestingSubject(true);
     try {
       const id = `${user.uid}-${schoolStage}-${schoolYear}-${tagId('subject', label)}`;
-      await setDoc(doc(db, 'subjectProposals', id), { label, normalizedLabel: label.toLowerCase(), schoolStage, schoolYear, requesterId: user.uid, requesterName: user.displayName || 'Teacher', requesterEmail: user.email || '', status: 'pending', createdAt: serverTimestamp() });
+      await setDoc(doc(db, 'subjectProposals', id), { label, normalizedLabel, schoolStage, schoolYear, requesterId: user.uid, requesterName: user.displayName || 'Teacher', requesterEmail: user.email || '', status: 'pending', createdAt: serverTimestamp() });
       window.localStorage.setItem(`slearn:subject-proposal:${id}`, 'pending');
       setSubjectRequestMessage('Submitted for admin approval. It will appear in the subject list after approval.');
       setCustomSubject('');
@@ -2755,6 +2765,10 @@ function Classroom({
       questions?: any[];
       questionCount?: number;
       enhanced?: boolean;
+      isExam?: boolean;
+      timeLimitMinutes?: number | null;
+      shuffleQuestions?: boolean;
+      allowPrevious?: boolean;
       createdAt?: any;
     }[]
   >([]);
@@ -3711,6 +3725,63 @@ function Classroom({
                               <Trash2 style={{ width: 12, height: 12 }} />
                             </button>
                           </div>
+                        )}
+                        {ex.isExam && (
+                          <span
+                            style={{
+                              background: '#fef3c7',
+                              color: '#92400e',
+                              border: '1px solid #fde68a',
+                              fontSize: '0.68rem',
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '99px',
+                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.25rem',
+                            }}
+                          >
+                            <Timer style={{ width: '11px', height: '11px' }} />{' '}
+                            Exam {ex.timeLimitMinutes ? `· ${ex.timeLimitMinutes}m` : ''}
+                          </span>
+                        )}
+                        {ex.isExam && ex.shuffleQuestions && (
+                          <span
+                            style={{
+                              background: '#f3f4f6',
+                              color: '#4b5563',
+                              border: '1px solid #e5e7eb',
+                              fontSize: '0.66rem',
+                              padding: '0.18rem 0.5rem',
+                              borderRadius: '99px',
+                              fontWeight: 600,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.2rem',
+                            }}
+                            title="Question order randomized for each student"
+                          >
+                            <Shuffle style={{ width: '10px', height: '10px' }} /> Shuffled
+                          </span>
+                        )}
+                        {ex.isExam && ex.allowPrevious === false && (
+                          <span
+                            style={{
+                              background: '#fef2f2',
+                              color: '#991b1b',
+                              border: '1px solid #fecaca',
+                              fontSize: '0.66rem',
+                              padding: '0.18rem 0.5rem',
+                              borderRadius: '99px',
+                              fontWeight: 600,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.2rem',
+                            }}
+                            title="Students cannot go back to previous questions"
+                          >
+                            <Lock style={{ width: '10px', height: '10px' }} /> No Backtracking
+                          </span>
                         )}
                         <span
                           style={{
@@ -5639,6 +5710,30 @@ function StudentExerciseRunner({
           },
         ]
       : [];
+  const isExam = Boolean(exercise.isExam);
+  const timeLimitMinutes = isExam ? (Number(exercise.timeLimitMinutes) || 30) : null;
+  const allowPrevious = isExam ? exercise.allowPrevious !== false : true;
+  const isShuffle = Boolean(exercise.shuffleQuestions);
+
+  // Derive question list, shuffling if enabled
+  const [activeQuestions] = useState<QuestionItem[]>(() => {
+    if (!isShuffle || rawQuestions.length <= 1) return rawQuestions;
+    // Simple deterministic-feeling shuffle for student session
+    const list = [...rawQuestions];
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
+  });
+
+  const [examStarted, setExamStarted] = useState(!isExam || isTeacher);
+  const [secondsRemaining, setSecondsRemaining] = useState<number | null>(() => {
+    if (!isExam || !timeLimitMinutes || isTeacher) return null;
+    return timeLimitMinutes * 60;
+  });
+  const [autoSubmittedDueToTime, setAutoSubmittedDueToTime] = useState(false);
+
   const [currentIdx, setCurrentIdx] = useState(0);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -5652,18 +5747,70 @@ function StudentExerciseRunner({
   const [checkingExisting, setCheckingExisting] = useState(true);
   const [allSubmissions, setAllSubmissions] = useState<SubmissionData[]>([]);
   const [loadingSubmissions, setLoadingSubmissions] = useState(isTeacher);
+  const [remarkingStudentId, setRemarkingStudentId] = useState<string | null>(null);
+  const [filterStatus, setFilterStatus] = useState<'all' | 'needs_review' | 'correct'>('all');
+  const [myQuestionResults, setMyQuestionResults] = useState<QuestionResult[]>([]);
 
   const dueInfo = formatDeadline(exercise.deadline);
-  const totalPoints = rawQuestions.reduce(
+  const totalPoints = activeQuestions.reduce(
     (n, q) => n + (Number(q.points) || 1),
     0,
   );
-  const currentQ = rawQuestions[currentIdx] || {
+  const currentQ = activeQuestions[currentIdx] || {
     question: 'No question text provided',
     answer: '',
     points: 1,
     enhanced: false,
   };
+
+  // Exam timer persistence via localStorage
+  useEffect(() => {
+    if (!isExam || !timeLimitMinutes || isTeacher || submitted || alreadyCompleted) return;
+
+    const storageKey = `slearn_exam_${classroom.id}_${exercise.id}_${user.uid}`;
+    let startTimeStr = localStorage.getItem(storageKey);
+
+    if (examStarted) {
+      if (!startTimeStr) {
+        startTimeStr = String(Date.now());
+        localStorage.setItem(storageKey, startTimeStr);
+      }
+      const startTime = Number(startTimeStr) || Date.now();
+      const totalSeconds = timeLimitMinutes * 60;
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      const remaining = Math.max(0, totalSeconds - elapsed);
+      setSecondsRemaining(remaining);
+    }
+  }, [isExam, timeLimitMinutes, isTeacher, examStarted, submitted, alreadyCompleted, classroom.id, exercise.id, user.uid]);
+
+  // Exam timer countdown interval & auto-submit
+  useEffect(() => {
+    if (!isExam || !examStarted || submitted || alreadyCompleted || secondsRemaining === null || isTeacher) {
+      return;
+    }
+
+    if (secondsRemaining <= 0) {
+      // Time is up! Auto-submit answers immediately
+      setAutoSubmittedDueToTime(true);
+      void submitExercise(true);
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setSecondsRemaining((prev) => {
+        if (prev === null) return null;
+        if (prev <= 1) {
+          clearInterval(timer);
+          setAutoSubmittedDueToTime(true);
+          void submitExercise(true);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [isExam, examStarted, submitted, alreadyCompleted, secondsRemaining, isTeacher]);
 
   useEffect(() => {
     if (!isTeacher) return;
@@ -5712,22 +5859,20 @@ function StudentExerciseRunner({
       setCheckingExisting(false);
       return;
     }
-    let isMounted = true;
-    const checkExisting = async () => {
-      try {
-        // 1. Direct doc check by user.uid
-        const directSnap = await getDoc(
-          doc(
-            db,
-            'classrooms',
-            classroom.id,
-            'exercises',
-            exercise.id,
-            'submissions',
-            user.uid,
-          ),
-        );
-        if (directSnap.exists() && isMounted) {
+    // Real-time listener on student's own submission so teacher remarks update the UI live
+    const subDocRef = doc(
+      db,
+      'classrooms',
+      classroom.id,
+      'exercises',
+      exercise.id,
+      'submissions',
+      user.uid,
+    );
+    const unsub = onSnapshot(
+      subDocRef,
+      async (directSnap) => {
+        if (directSnap.exists()) {
           const data = directSnap.data();
           const stats = computeSubmissionStats(
             { id: directSnap.id, ...data } as SubmissionData,
@@ -5737,60 +5882,113 @@ function StudentExerciseRunner({
           setEarnedScore(data.score ?? 0);
           setTotalCorrectState(stats.correct);
           setTotalWrongState(stats.wrong);
+          setMyQuestionResults(stats.questionResults);
           setIsLateSubmission(Boolean(data.isLate));
           setSubmitted(true);
           setAlreadyCompleted(true);
           setCheckingExisting(false);
-          return;
+        } else {
+          // No direct doc — check old auto-id submissions once (fallback)
+          try {
+            const qSnap = await getDocs(
+              query(
+                collection(
+                  db,
+                  'classrooms',
+                  classroom.id,
+                  'exercises',
+                  exercise.id,
+                  'submissions',
+                ),
+                where('studentId', '==', user.uid),
+                limit(1),
+              ),
+            );
+            if (!qSnap.empty) {
+              const d = qSnap.docs[0];
+              const data = d.data();
+              const stats = computeSubmissionStats(
+                { id: d.id, ...data } as SubmissionData,
+                exercise,
+              );
+              setAnswers(data.answers || {});
+              setEarnedScore(data.score ?? 0);
+              setTotalCorrectState(stats.correct);
+              setTotalWrongState(stats.wrong);
+              setMyQuestionResults(stats.questionResults);
+              setIsLateSubmission(Boolean(data.isLate));
+              setSubmitted(true);
+              setAlreadyCompleted(true);
+            }
+          } catch (e) {
+            console.warn('Check existing submission note:', e);
+          } finally {
+            setCheckingExisting(false);
+          }
         }
-
-        // 2. Query check in case an older submission had random auto-id
-        const qSnap = await getDocs(
-          query(
-            collection(
-              db,
-              'classrooms',
-              classroom.id,
-              'exercises',
-              exercise.id,
-              'submissions',
-            ),
-            where('studentId', '==', user.uid),
-            limit(1),
-          ),
-        );
-        if (!qSnap.empty && isMounted) {
-          const d = qSnap.docs[0];
-          const data = d.data();
-          const stats = computeSubmissionStats(
-            { id: d.id, ...data } as SubmissionData,
-            exercise,
-          );
-          setAnswers(data.answers || {});
-          setEarnedScore(data.score ?? 0);
-          setTotalCorrectState(stats.correct);
-          setTotalWrongState(stats.wrong);
-          setIsLateSubmission(Boolean(data.isLate));
-          setSubmitted(true);
-          setAlreadyCompleted(true);
-          setCheckingExisting(false);
-          return;
-        }
-      } catch (e) {
-        console.warn('Check existing submission note:', e);
-      } finally {
-        if (isMounted) setCheckingExisting(false);
-      }
-    };
-    checkExisting();
-    return () => {
-      isMounted = false;
-    };
+      },
+      (err) => {
+        console.warn('Submission snapshot error:', err);
+        setCheckingExisting(false);
+      },
+    );
+    return () => unsub();
   }, [isTeacher, classroom.id, exercise.id, user.uid]);
+
 
   const handleAnswer = (text: string) => {
     if (isTeacher || alreadyCompleted || submitted) return;
     setAnswers((prev) => ({ ...prev, [currentIdx]: text }));
+  };
+
+  const handleTeacherRemark = async (
+    sub: SubmissionData,
+    questionIdx: number,
+    markAsCorrect: boolean,
+  ) => {
+    const subId = sub.studentId || sub.id;
+    setRemarkingStudentId(`${subId}-${questionIdx}`);
+    try {
+      // Build updated questionResults
+      const updatedResults: QuestionResult[] = (sub.questionResults?.length
+        ? sub.questionResults
+        : computeSubmissionStats(sub, exercise).questionResults
+      ).map((r) => {
+        if (r.questionIdx !== questionIdx) return r;
+        const pts = r.pointsPossible || Number(activeQuestions[questionIdx]?.points) || 1;
+        const studentAns = r.studentAnswer || sub.answers?.[questionIdx] || '';
+        const earned = markAsCorrect
+          ? pts
+          : studentAns.trim().length > 0
+            ? Math.max(1, Math.round(pts * 0.5))
+            : 0;
+        return {
+          ...r,
+          isCorrect: markAsCorrect,
+          teacherRemarked: markAsCorrect,
+          remarkedAt: markAsCorrect ? new Date().toISOString() : undefined,
+          pointsEarned: earned,
+        };
+      });
+
+      const newScore = updatedResults.reduce((acc, r) => acc + (r.pointsEarned || 0), 0);
+      const newCorrect = updatedResults.filter((r) => r.isCorrect).length;
+      const newWrong = updatedResults.filter((r) => !r.isCorrect).length;
+
+      await updateDoc(
+        doc(db, 'classrooms', classroom.id, 'exercises', exercise.id, 'submissions', subId),
+        {
+          questionResults: updatedResults,
+          score: newScore,
+          totalCorrect: newCorrect,
+          totalWrong: newWrong,
+        },
+      );
+    } catch (e: any) {
+      console.error('Remark error:', e);
+    } finally {
+      setRemarkingStudentId(null);
+    }
   };
 
   const isPastDeadline = Boolean(
@@ -5800,13 +5998,13 @@ function StudentExerciseRunner({
   const allowsLate = exercise.allowLateSubmissions !== false;
   const isLateLocked = !isTeacher && isPastDeadline && !allowsLate;
 
-  const submitExercise = async () => {
+  const submitExercise = async (isAutoSubmit = false) => {
     if (isTeacher) return;
     if (alreadyCompleted || submitted) {
       setSubmitError('You have already completed this exercise.');
       return;
     }
-    if (isLateLocked) {
+    if (isLateLocked && !isAutoSubmit) {
       setSubmitError(
         'The deadline for this exercise has passed, and late submissions are not accepted.',
       );
@@ -5820,7 +6018,7 @@ function StudentExerciseRunner({
       let wrongCount = 0;
       const questionResults: QuestionResult[] = [];
 
-      rawQuestions.forEach((q, i) => {
+      activeQuestions.forEach((q, i) => {
         const userA = (answers[i] || '').trim();
         const userALow = userA.toLowerCase();
         const expA = (q.answer || '').trim();
@@ -5894,6 +6092,8 @@ function StudentExerciseRunner({
           totalWrong: wrongCount,
           questionResults,
           isLate,
+          isExam,
+          autoSubmitted: isAutoSubmit,
           submittedAt: serverTimestamp(),
         },
       );
@@ -6004,6 +6204,47 @@ function StudentExerciseRunner({
             flexWrap: 'wrap',
           }}
         >
+          {isExam && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                background: '#fef3c7',
+                color: '#92400e',
+                border: '1px solid #fde68a',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                padding: '0.2rem 0.65rem',
+                borderRadius: 99,
+              }}
+            >
+              <Timer style={{ width: 12, height: 12 }} /> Exam
+            </span>
+          )}
+          {isExam && !submitted && !alreadyCompleted && !isTeacher && examStarted && secondsRemaining !== null && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: secondsRemaining <= 60 ? '#fef2f2' : secondsRemaining <= 300 ? '#fffbeb' : '#111',
+                color: secondsRemaining <= 60 ? '#dc2626' : secondsRemaining <= 300 ? '#b45309' : '#fff',
+                border: `1px solid ${secondsRemaining <= 60 ? '#fca5a5' : secondsRemaining <= 300 ? '#fde68a' : '#111'}`,
+                fontSize: '0.82rem',
+                fontWeight: 800,
+                padding: '0.25rem 0.75rem',
+                borderRadius: 99,
+                letterSpacing: '0.04em',
+                boxShadow: secondsRemaining <= 60 ? '0 0 10px rgba(220, 38, 38, 0.35)' : undefined,
+              }}
+            >
+              <Clock3 style={{ width: 14, height: 14 }} />
+              {String(Math.floor(secondsRemaining / 60)).padStart(2, '0')}:
+              {String(secondsRemaining % 60).padStart(2, '0')}
+              {secondsRemaining <= 60 && <span style={{ fontSize: '0.68rem', fontWeight: 600 }}>Ending soon!</span>}
+            </span>
+          )}
           {isTeacher && (
             <span
               style={{
@@ -6067,12 +6308,12 @@ function StudentExerciseRunner({
           )}
           <span className="sdg-pill">
             {isTeacher
-              ? `Question ${currentIdx + 1} of ${rawQuestions.length}`
+              ? `Question ${currentIdx + 1} of ${activeQuestions.length}`
               : submitted
                 ? 'Completed'
                 : isLateLocked
                   ? 'Closed'
-                  : `Question ${currentIdx + 1} of ${rawQuestions.length}`}
+                  : `Question ${currentIdx + 1} of ${activeQuestions.length}`}
           </span>
         </div>
       </div>
@@ -6132,6 +6373,42 @@ function StudentExerciseRunner({
               marginBottom: '0.8rem',
             }}
           >
+            {isExam && (
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  background: '#fef3c7',
+                  color: '#92400e',
+                  border: '1px solid #fde68a',
+                  padding: '0.35rem 0.9rem',
+                  borderRadius: 99,
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                }}
+              >
+                <Timer style={{ width: 14, height: 14 }} /> Timed Exam Assessment
+              </div>
+            )}
+            {autoSubmittedDueToTime && (
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  background: '#fff7ed',
+                  color: '#c2410c',
+                  border: '1px solid #fdba74',
+                  padding: '0.35rem 0.9rem',
+                  borderRadius: 99,
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                }}
+              >
+                <Clock3 style={{ width: 14, height: 14 }} /> Auto-Submitted (Time Expired)
+              </div>
+            )}
             {alreadyCompleted && (
               <div
                 style={{
@@ -6174,13 +6451,25 @@ function StudentExerciseRunner({
             style={{ fontSize: '2rem', fontWeight: 600, margin: '0 0 0.5rem' }}
           >
             {alreadyCompleted
-              ? 'Exercise Already Completed'
-              : 'Exercise Completed!'}
+              ? isExam
+                ? 'Exam Already Submitted'
+                : 'Exercise Already Completed'
+              : isExam
+                ? autoSubmittedDueToTime
+                  ? 'Exam Finished (Time is Up)'
+                  : 'Exam Submitted Successfully!'
+                : 'Exercise Completed!'}
           </h2>
           <p style={{ color: '#66786e', margin: '0 0 2rem' }}>
-            {alreadyCompleted
-              ? 'You have already answered this exercise. Review your results below.'
-              : 'Your answers have been submitted to your teacher.'}
+            {autoSubmittedDueToTime
+              ? 'Your exam timer reached 00:00. Your completed answers have been automatically collected.'
+              : alreadyCompleted
+                ? isExam
+                  ? 'You have already completed this exam (single attempt policy). Review your results below.'
+                  : 'You have already answered this exercise. Review your results below.'
+                : isExam
+                  ? 'Your exam has been submitted and recorded. Here is your result breakdown.'
+                  : 'Your answers have been submitted to your teacher.'}
           </p>
           <div
             style={{
@@ -6331,25 +6620,32 @@ function StudentExerciseRunner({
               Review Your Answers
             </h3>
             <div style={{ display: 'grid', gap: '1rem' }}>
-              {rawQuestions.map((q, i) => {
+              {activeQuestions.map((q, i) => {
                 const userAns = answers[i] || '';
-                const userALow = userAns.trim().toLowerCase();
-                const expALow = (q.answer || '').trim().toLowerCase();
-                const isCorrect =
-                  userALow &&
-                  expALow &&
-                  (userALow === expALow ||
-                    expALow.includes(userALow) ||
-                    userALow.includes(expALow));
+                const qRes = myQuestionResults.find((r) => r.questionIdx === i);
+                const isRemarks = Boolean(qRes?.teacherRemarked);
+                const isCorrect = qRes
+                  ? qRes.isCorrect
+                  : (() => {
+                      const userALow = userAns.trim().toLowerCase();
+                      const expALow = (q.answer || '').trim().toLowerCase();
+                      return Boolean(
+                        userALow &&
+                          expALow &&
+                          (userALow === expALow ||
+                            expALow.includes(userALow) ||
+                            userALow.includes(expALow)),
+                      );
+                    })();
                 return (
                   <div
                     key={i}
                     style={{
                       borderBottom:
-                        i < rawQuestions.length - 1
+                        i < activeQuestions.length - 1
                           ? '1px solid #eeeae4'
                           : 'none',
-                      paddingBottom: i < rawQuestions.length - 1 ? '1rem' : '0',
+                      paddingBottom: i < activeQuestions.length - 1 ? '1rem' : '0',
                     }}
                   >
                     <div
@@ -6372,19 +6668,38 @@ function StudentExerciseRunner({
                         Question 0{i + 1}
                         <span style={{ background: difficultyColour(q.difficulty || 'medium'), borderRadius: 999, padding: '2px 6px', marginLeft: 6 }}>{q.difficulty || 'medium'}</span>
                       </span>
-                      <span
-                        style={{
-                          fontSize: '0.72rem',
-                          fontWeight: 600,
-                          color: isCorrect ? '#15803d' : '#b91c1c',
-                          background: isCorrect ? '#f0fdf4' : '#fef2f2',
-                          border: `1px solid ${isCorrect ? '#bbf7d0' : '#fecaca'}`,
-                          padding: '1px 7px',
-                          borderRadius: 99,
-                        }}
-                      >
-                        {isCorrect ? 'Correct' : 'Needs Review'}
-                      </span>
+                      {isRemarks ? (
+                        <span
+                          style={{
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            color: '#6d28d9',
+                            background: '#ede9fe',
+                            border: '1px solid #c4b5fd',
+                            padding: '1px 7px',
+                            borderRadius: 99,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                          }}
+                        >
+                          <Check style={{ width: 10, height: 10 }} /> Remarked Correct by Teacher
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            color: isCorrect ? '#15803d' : '#b91c1c',
+                            background: isCorrect ? '#f0fdf4' : '#fef2f2',
+                            border: `1px solid ${isCorrect ? '#bbf7d0' : '#fecaca'}`,
+                            padding: '1px 7px',
+                            borderRadius: 99,
+                          }}
+                        >
+                          {isCorrect ? 'Correct' : 'Needs Review'}
+                        </span>
+                      )}
                     </div>
                     <p
                       style={{
@@ -6485,16 +6800,172 @@ function StudentExerciseRunner({
             <ArrowLeft /> Back to Classroom
           </Button>
         </div>
+      ) : !examStarted && !isTeacher ? (
+        <div
+          style={{
+            background: '#fff',
+            borderRadius: '24px',
+            padding: '3rem 2rem',
+            boxShadow: '0 0 0 1px #eeeae4',
+            maxWidth: '680px',
+            margin: '2rem auto',
+            textAlign: 'center',
+          }}
+        >
+          <div
+            style={{
+              width: '64px',
+              height: '64px',
+              background: '#fef3c7',
+              borderRadius: '50%',
+              display: 'grid',
+              placeItems: 'center',
+              margin: '0 auto 1.2rem',
+              color: '#92400e',
+            }}
+          >
+            <Timer style={{ width: '32px', height: '32px' }} />
+          </div>
+
+          <span
+            style={{
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              color: '#92400e',
+              background: '#fffbeb',
+              border: '1px solid #fde68a',
+              padding: '3px 10px',
+              borderRadius: 99,
+              display: 'inline-block',
+              marginBottom: '0.6rem',
+            }}
+          >
+            Official Assessment · Timed Exam
+          </span>
+
+          <h2
+            style={{
+              fontSize: '1.8rem',
+              fontWeight: 700,
+              margin: '0 0 0.5rem',
+              color: '#111',
+            }}
+          >
+            {exercise.title}
+          </h2>
+          <p
+            style={{
+              color: '#666',
+              fontSize: '0.92rem',
+              margin: '0 auto 1.8rem',
+              maxWidth: '520px',
+              lineHeight: 1.5,
+            }}
+          >
+            This exercise is configured in <strong>Exam Mode</strong>. Please review the rules below carefully before beginning.
+          </p>
+
+          <div
+            style={{
+              background: '#fbfaf7',
+              border: '1px solid #eeeae4',
+              borderRadius: '16px',
+              padding: '1.2rem 1.4rem',
+              textAlign: 'left',
+              display: 'grid',
+              gap: '0.9rem',
+              marginBottom: '2rem',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Clock3 style={{ width: 18, height: 18, color: '#b45309', flexShrink: 0 }} />
+              <div>
+                <strong style={{ fontSize: '0.88rem', color: '#111', display: 'block' }}>
+                  Time Limit: {timeLimitMinutes} minutes
+                </strong>
+                <span style={{ fontSize: '0.78rem', color: '#666' }}>
+                  The countdown timer begins immediately once you click "Start Exam Now". When the timer reaches 00:00, your exam will <strong>automatically submit</strong>.
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <CheckCircle2 style={{ width: 18, height: 18, color: '#15803d', flexShrink: 0 }} />
+              <div>
+                <strong style={{ fontSize: '0.88rem', color: '#111', display: 'block' }}>
+                  Single Attempt Only
+                </strong>
+                <span style={{ fontSize: '0.78rem', color: '#666' }}>
+                  You can only submit this exam once. Once submitted, you cannot retake the questions.
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              {allowPrevious ? (
+                <Check style={{ width: 18, height: 18, color: '#15803d', flexShrink: 0 }} />
+              ) : (
+                <Lock style={{ width: 18, height: 18, color: '#dc2626', flexShrink: 0 }} />
+              )}
+              <div>
+                <strong style={{ fontSize: '0.88rem', color: '#111', display: 'block' }}>
+                  Navigation: {allowPrevious ? 'Rechecking Allowed' : 'Strict Sequential (No Backtracking)'}
+                </strong>
+                <span style={{ fontSize: '0.78rem', color: '#666' }}>
+                  {allowPrevious
+                    ? 'You can navigate freely between questions to review or update your answers before submitting.'
+                    : 'Once you submit or proceed past a question, you cannot return to change your answer.'}
+                </span>
+              </div>
+            </div>
+
+            {isShuffle && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Shuffle style={{ width: 18, height: 18, color: '#4b5563', flexShrink: 0 }} />
+                <div>
+                  <strong style={{ fontSize: '0.88rem', color: '#111', display: 'block' }}>
+                    Randomized Question Order
+                  </strong>
+                  <span style={{ fontSize: '0.78rem', color: '#666' }}>
+                    Questions are arranged in a randomized sequence for your assessment.
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
+            <Button variant="outline" onClick={onBack}>
+              <ArrowLeft /> Return to Classroom
+            </Button>
+            <Button
+              className="primary-action"
+              onClick={() => setExamStarted(true)}
+              style={{
+                background: '#111',
+                padding: '0 24px',
+                height: '44px',
+                borderRadius: '12px',
+                fontSize: '0.92rem',
+                fontWeight: 700,
+              }}
+            >
+              <Timer style={{ width: 16, height: 16, marginRight: 6 }} /> Start Exam Now ({timeLimitMinutes}m)
+            </Button>
+          </div>
+        </div>
       ) : (
         <div className="classroom-layout">
           <section className="panel activity-panel">
             <div className="panel-head" style={{ marginBottom: '1rem' }}>
               <div>
                 <span className="kicker">
-                  Question 0{currentIdx + 1} of 0{rawQuestions.length}
+                  {isExam ? 'Exam Question' : 'Question'} 0{currentIdx + 1} of 0{activeQuestions.length}
                 </span>
                 <h2 style={{ fontSize: '1.3rem', marginTop: '0.2rem' }}>
-                  {isTeacher ? 'Question Preview' : 'Solve the problem'}
+                  {isTeacher ? 'Question Preview' : isExam ? 'Answer the exam question' : 'Solve the problem'}
                 </h2>
               </div>
               <span
@@ -6623,7 +7094,7 @@ function StudentExerciseRunner({
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
-                      marginBottom: '1rem',
+                      marginBottom: '0.75rem',
                       flexWrap: 'wrap',
                       gap: '8px',
                     }}
@@ -6650,6 +7121,29 @@ function StudentExerciseRunner({
                         {allSubmissions.length} submission{allSubmissions.length !== 1 ? 's' : ''}
                       </span>
                     </div>
+                  </div>
+
+                  {/* Filter tabs */}
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                    {(['all', 'needs_review', 'correct'] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        onClick={() => setFilterStatus(tab)}
+                        style={{
+                          padding: '4px 12px',
+                          borderRadius: 99,
+                          border: filterStatus === tab ? '1.5px solid #173e30' : '1.5px solid #e0dbd4',
+                          background: filterStatus === tab ? '#173e30' : '#fff',
+                          color: filterStatus === tab ? '#fff' : '#555',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        {tab === 'all' ? 'All' : tab === 'needs_review' ? 'Needs Review' : 'Correct'}
+                      </button>
+                    ))}
                   </div>
 
                   {loadingSubmissions ? (
@@ -6683,20 +7177,35 @@ function StudentExerciseRunner({
                     </div>
                   ) : (
                     <div style={{ display: 'grid', gap: '0.75rem' }}>
-                      {allSubmissions.map((sub) => {
+                      {allSubmissions
+                        .filter((sub) => {
+                          const res =
+                            sub.questionResults?.find((r) => r.questionIdx === currentIdx) ||
+                            computeSubmissionStats(sub, exercise).questionResults[currentIdx];
+                          const studentAns = sub.answers?.[currentIdx] ?? res?.studentAnswer ?? '';
+                          const hasAns = Boolean(studentAns && studentAns.trim().length > 0);
+                          const isC = res ? res.isCorrect : false;
+                          if (filterStatus === 'needs_review') return hasAns && !isC;
+                          if (filterStatus === 'correct') return isC;
+                          return true;
+                        })
+                        .map((sub) => {
                         const res =
                           sub.questionResults?.find((r) => r.questionIdx === currentIdx) ||
                           computeSubmissionStats(sub, exercise).questionResults[currentIdx];
                         const studentAns = sub.answers?.[currentIdx] ?? res?.studentAnswer ?? '';
                         const isCorrect = res ? res.isCorrect : false;
+                        const isTeacherRemarked = Boolean(res?.teacherRemarked);
                         const hasAnswered = Boolean(studentAns && studentAns.trim().length > 0);
+                        const subId = sub.studentId || sub.id;
+                        const isRemarkingThis = remarkingStudentId === `${subId}-${currentIdx}`;
 
                         return (
                           <div
                             key={sub.id || sub.studentId}
                             style={{
                               background: '#fff',
-                              border: '1px solid #eeeae4',
+                              border: isTeacherRemarked ? '1px solid #c4b5fd' : '1px solid #eeeae4',
                               borderRadius: 14,
                               padding: '0.9rem 1.1rem',
                             }}
@@ -6753,27 +7262,47 @@ function StudentExerciseRunner({
                                   </span>
                                 )}
                                 {hasAnswered ? (
-                                  <span
-                                    style={{
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      fontSize: '0.72rem',
-                                      fontWeight: 700,
-                                      color: isCorrect ? '#15803d' : '#b91c1c',
-                                      background: isCorrect ? '#f0fdf4' : '#fef2f2',
-                                      border: `1px solid ${isCorrect ? '#bbf7d0' : '#fecaca'}`,
-                                      padding: '2px 8px',
-                                      borderRadius: 99,
-                                    }}
-                                  >
-                                    {isCorrect ? (
+                                  isTeacherRemarked ? (
+                                    <span
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        fontSize: '0.72rem',
+                                        fontWeight: 700,
+                                        color: '#6d28d9',
+                                        background: '#ede9fe',
+                                        border: '1px solid #c4b5fd',
+                                        padding: '2px 8px',
+                                        borderRadius: 99,
+                                      }}
+                                    >
                                       <Check style={{ width: 11, height: 11 }} />
-                                    ) : (
-                                      <X style={{ width: 11, height: 11 }} />
-                                    )}
-                                    {isCorrect ? 'Correct' : 'Needs Review'}
-                                  </span>
+                                      Remarked Correct
+                                    </span>
+                                  ) : (
+                                    <span
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        fontSize: '0.72rem',
+                                        fontWeight: 700,
+                                        color: isCorrect ? '#15803d' : '#b91c1c',
+                                        background: isCorrect ? '#f0fdf4' : '#fef2f2',
+                                        border: `1px solid ${isCorrect ? '#bbf7d0' : '#fecaca'}`,
+                                        padding: '2px 8px',
+                                        borderRadius: 99,
+                                      }}
+                                    >
+                                      {isCorrect ? (
+                                        <Check style={{ width: 11, height: 11 }} />
+                                      ) : (
+                                        <X style={{ width: 11, height: 11 }} />
+                                      )}
+                                      {isCorrect ? 'Correct' : 'Needs Review'}
+                                    </span>
+                                  )
                                 ) : (
                                   <span
                                     style={{
@@ -6809,6 +7338,67 @@ function StudentExerciseRunner({
                                 </em>
                               )}
                             </div>
+
+                            {/* Remark action — only show when student provided an answer */}
+                            {hasAnswered && (
+                              <div style={{ marginTop: '0.6rem', display: 'flex', justifyContent: 'flex-end' }}>
+                                {isTeacherRemarked ? (
+                                  <button
+                                    disabled={isRemarkingThis}
+                                    onClick={() => handleTeacherRemark(sub, currentIdx, false)}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '5px',
+                                      padding: '4px 12px',
+                                      borderRadius: 99,
+                                      border: '1px solid #c4b5fd',
+                                      background: '#ede9fe',
+                                      color: '#6d28d9',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 600,
+                                      cursor: isRemarkingThis ? 'not-allowed' : 'pointer',
+                                      opacity: isRemarkingThis ? 0.6 : 1,
+                                    }}
+                                  >
+                                    {isRemarkingThis ? (
+                                      <LoaderCircle className="animate-spin" style={{ width: 11, height: 11 }} />
+                                    ) : (
+                                      <X style={{ width: 11, height: 11 }} />
+                                    )}
+                                    Undo Remark
+                                  </button>
+                                ) : (
+                                  !isCorrect && (
+                                    <button
+                                      disabled={isRemarkingThis}
+                                      onClick={() => handleTeacherRemark(sub, currentIdx, true)}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '5px',
+                                        padding: '4px 12px',
+                                        borderRadius: 99,
+                                        border: '1px solid #173e30',
+                                        background: '#173e30',
+                                        color: '#fff',
+                                        fontSize: '0.72rem',
+                                        fontWeight: 600,
+                                        cursor: isRemarkingThis ? 'not-allowed' : 'pointer',
+                                        opacity: isRemarkingThis ? 0.6 : 1,
+                                      }}
+                                    >
+                                      {isRemarkingThis ? (
+                                        <LoaderCircle className="animate-spin" style={{ width: 11, height: 11 }} />
+                                      ) : (
+                                        <Check style={{ width: 11, height: 11 }} />
+                                      )}
+                                      Remark as Correct
+                                    </button>
+                                  )
+                                )}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -6833,7 +7423,7 @@ function StudentExerciseRunner({
                   >
                     <ArrowLeft /> Previous Question
                   </Button>
-                  {currentIdx < rawQuestions.length - 1 ? (
+                  {currentIdx < activeQuestions.length - 1 ? (
                     <Button onClick={() => setCurrentIdx((prev) => prev + 1)}>
                       Next Question <ArrowRight />
                     </Button>
@@ -6895,18 +7485,23 @@ function StudentExerciseRunner({
                 >
                   <Button
                     variant="outline"
-                    disabled={currentIdx === 0}
-                    onClick={() => setCurrentIdx((prev) => Math.max(0, prev - 1))}
+                    disabled={currentIdx === 0 || !allowPrevious}
+                    onClick={() => {
+                      if (!allowPrevious) return;
+                      setCurrentIdx((prev) => Math.max(0, prev - 1));
+                    }}
+                    title={!allowPrevious ? 'Exam rule: Returning to previous questions is locked' : undefined}
+                    style={!allowPrevious ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
                   >
-                    <ArrowLeft /> Previous
+                    <ArrowLeft /> Previous {!allowPrevious && '(Locked)'}
                   </Button>
-                  {currentIdx < rawQuestions.length - 1 ? (
+                  {currentIdx < activeQuestions.length - 1 ? (
                     <Button onClick={() => setCurrentIdx((prev) => prev + 1)}>
                       Next Question <ArrowRight />
                     </Button>
                   ) : (
                     <Button
-                      onClick={submitExercise}
+                      onClick={() => submitExercise(false)}
                       disabled={submitting}
                       className="primary-action"
                     >
@@ -6920,10 +7515,10 @@ function StudentExerciseRunner({
 
           <aside className="panel class-stats">
             <span className="kicker">
-              {isTeacher ? 'Exercise Overview' : 'Progress'}
+              {isTeacher ? 'Exercise Overview' : isExam ? 'Exam Progress' : 'Progress'}
             </span>
             <h2>
-              {isTeacher ? `${rawQuestions.length} Questions` : `${progressPct}%`}
+              {isTeacher ? `${activeQuestions.length} Questions` : `${progressPct}%`}
             </h2>
             {!isTeacher && <Progress value={progressPct} />}
             {isTeacher && (
@@ -6931,10 +7526,31 @@ function StudentExerciseRunner({
                 {allSubmissions.length} student submission{allSubmissions.length !== 1 ? 's' : ''} received
               </p>
             )}
+            {!isTeacher && isExam && !allowPrevious && (
+              <div
+                style={{
+                  marginTop: '0.75rem',
+                  padding: '6px 10px',
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  borderRadius: '10px',
+                  fontSize: '0.72rem',
+                  color: '#991b1b',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  lineHeight: 1.4,
+                }}
+              >
+                <Lock style={{ width: 13, height: 13, flexShrink: 0 }} />
+                <span>Strict sequential mode: Cannot return to previous questions.</span>
+              </div>
+            )}
             <div
               style={{ marginTop: '1.5rem', display: 'grid', gap: '0.5rem' }}
             >
-              {rawQuestions.map((q, i) => {
+              {activeQuestions.map((q, i) => {
+                const isNavLocked = !isTeacher && isExam && !allowPrevious && i < currentIdx;
                 const correctCount = isTeacher
                   ? allSubmissions.filter((s) => {
                       const res =
@@ -6947,7 +7563,11 @@ function StudentExerciseRunner({
                 return (
                   <button
                     key={i}
-                    onClick={() => setCurrentIdx(i)}
+                    disabled={isNavLocked}
+                    onClick={() => {
+                      if (isNavLocked) return;
+                      setCurrentIdx(i);
+                    }}
                     style={{
                       display: 'flex',
                       justifyContent: 'space-between',
@@ -6959,12 +7579,16 @@ function StudentExerciseRunner({
                       background:
                         currentIdx === i
                           ? '#fff'
-                          : !isTeacher && answers[i]?.trim()
-                            ? '#eef2ee'
-                            : '#fcfbf9',
-                      cursor: 'pointer',
+                          : isNavLocked
+                            ? '#f5f5f4'
+                            : !isTeacher && answers[i]?.trim()
+                              ? '#eef2ee'
+                              : '#fcfbf9',
+                      cursor: isNavLocked ? 'not-allowed' : 'pointer',
+                      opacity: isNavLocked ? 0.65 : 1,
                       textAlign: 'left',
                     }}
+                    title={isNavLocked ? 'Exam rule: Cannot return to past questions' : undefined}
                   >
                     <div>
                       <span
@@ -7038,6 +7662,16 @@ function QuizBuilder({
   const [deadline, setDeadline] = useState(initialExercise?.deadline || '');
   const [allowLateSubmissions, setAllowLateSubmissions] = useState(
     initialExercise ? initialExercise.allowLateSubmissions !== false : true,
+  );
+  const [isExam, setIsExam] = useState(Boolean(initialExercise?.isExam));
+  const [timeLimitMinutes, setTimeLimitMinutes] = useState<number>(
+    initialExercise?.timeLimitMinutes ? Number(initialExercise.timeLimitMinutes) : 30,
+  );
+  const [shuffleQuestions, setShuffleQuestions] = useState(
+    Boolean(initialExercise?.shuffleQuestions),
+  );
+  const [allowPrevious, setAllowPrevious] = useState(
+    initialExercise ? initialExercise.allowPrevious !== false : true,
   );
   const [questions, setQuestions] = useState<QuestionItem[]>(() => {
     if (initialExercise?.questions?.length) {
@@ -7313,6 +7947,10 @@ function QuizBuilder({
             title: title.trim(),
             deadline: deadline.trim() || null,
             allowLateSubmissions: deadline.trim() ? allowLateSubmissions : true,
+            isExam: Boolean(isExam),
+            timeLimitMinutes: isExam ? Math.max(1, Number(timeLimitMinutes) || 30) : null,
+            shuffleQuestions: Boolean(shuffleQuestions),
+            allowPrevious: isExam ? Boolean(allowPrevious) : true,
             questions: questionPayload,
             questionCount: questions.length,
             enhanced: hasEnhancedAny,
@@ -7324,6 +7962,10 @@ function QuizBuilder({
           title: title.trim(),
           deadline: deadline.trim() || null,
           allowLateSubmissions: deadline.trim() ? allowLateSubmissions : true,
+          isExam: Boolean(isExam),
+          timeLimitMinutes: isExam ? Math.max(1, Number(timeLimitMinutes) || 30) : null,
+          shuffleQuestions: Boolean(shuffleQuestions),
+          allowPrevious: isExam ? Boolean(allowPrevious) : true,
           questions: questionPayload,
           questionCount: questions.length,
           enhanced: hasEnhancedAny,
@@ -7595,6 +8237,237 @@ function QuizBuilder({
                   </p>
                 </div>
               </label>
+            </div>
+          )}
+        </div>
+
+        {/* Exam Mode & Assessment Controls */}
+        <div
+          style={{
+            marginTop: '1.2rem',
+            paddingTop: '1.2rem',
+            borderTop: '1px solid #f0ede6',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '10px',
+            }}
+          >
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Timer style={{ width: 17, height: 17, color: isExam ? '#b45309' : '#173e30' }} />
+                <strong style={{ fontSize: '0.95rem', color: '#111' }}>
+                  Exam / Assessment Mode
+                </strong>
+                {isExam && (
+                  <span
+                    style={{
+                      fontSize: '0.7rem',
+                      fontWeight: 700,
+                      background: '#fef3c7',
+                      color: '#92400e',
+                      border: '1px solid #fde68a',
+                      padding: '2px 8px',
+                      borderRadius: 99,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    Timed Exam Active
+                  </span>
+                )}
+              </div>
+              <p style={{ fontSize: '0.8rem', color: '#6e7e75', margin: '3px 0 0' }}>
+                Set a time limit with automatic submission, single-attempt policy, and integrity controls.
+              </p>
+            </div>
+
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                cursor: 'pointer',
+                background: isExam ? '#fef3c7' : '#f4f1eb',
+                border: `1px solid ${isExam ? '#fde68a' : '#e5e1da'}`,
+                padding: '6px 14px',
+                borderRadius: 99,
+                fontWeight: 600,
+                fontSize: '0.82rem',
+                color: isExam ? '#92400e' : '#444',
+                transition: 'all 0.15s',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={isExam}
+                onChange={(e) => setIsExam(e.target.checked)}
+                style={{ accentColor: '#b45309', width: 15, height: 15 }}
+              />
+              Enable Exam Mode
+            </label>
+          </div>
+
+          {isExam && (
+            <div
+              style={{
+                marginTop: '1rem',
+                padding: '1.2rem',
+                background: '#fffdfa',
+                border: '1px solid #fae8c8',
+                borderRadius: '16px',
+                display: 'grid',
+                gap: '1.1rem',
+              }}
+            >
+              {/* 1. Timer setting */}
+              <div>
+                <label className="form-label" style={{ fontSize: '0.86rem', fontWeight: 700, color: '#2d3748' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Clock3 style={{ width: 15, height: 15, color: '#b45309' }} />
+                    Exam Duration / Timer Limit (Minutes)
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="300"
+                      value={timeLimitMinutes}
+                      onChange={(e) => setTimeLimitMinutes(Math.max(1, Math.min(300, Number(e.target.value) || 1)))}
+                      style={{
+                        width: '140px',
+                        fontWeight: 700,
+                        fontSize: '1rem',
+                        background: '#fff',
+                        borderRadius: '10px',
+                      }}
+                    />
+                    <span style={{ fontSize: '0.85rem', color: '#666', fontWeight: 500 }}>minutes</span>
+
+                    {/* Quick presets */}
+                    <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                      {[10, 15, 20, 30, 45, 60].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setTimeLimitMinutes(preset)}
+                          style={{
+                            padding: '4px 10px',
+                            borderRadius: '8px',
+                            border: `1px solid ${timeLimitMinutes === preset ? '#b45309' : '#e5e1da'}`,
+                            background: timeLimitMinutes === preset ? '#b45309' : '#fff',
+                            color: timeLimitMinutes === preset ? '#fff' : '#555',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {preset}m
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </label>
+                <p style={{ margin: '4px 0 0', fontSize: '0.76rem', color: '#7a6a55' }}>
+                  When this timer reaches 00:00, the student's exam will automatically submit their current answers.
+                </p>
+              </div>
+
+              {/* 2. Shuffle questions setting */}
+              <div style={{ paddingTop: '0.9rem', borderTop: '1px solid #f3e8d8' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '10px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    color: '#111',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={shuffleQuestions}
+                    onChange={(e) => setShuffleQuestions(e.target.checked)}
+                    style={{
+                      marginTop: '3px',
+                      accentColor: '#173e30',
+                      width: 16,
+                      height: 16,
+                    }}
+                  />
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Shuffle style={{ width: 14, height: 14, color: '#173e30' }} />
+                      <span>Randomize / Shuffle question order for each student</span>
+                    </div>
+                    <p style={{ margin: '2px 0 0', fontSize: '0.75rem', fontWeight: 400, color: '#666' }}>
+                      Questions will appear in a randomized order to prevent students from copying adjacent question numbers.
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              {/* 3. Allow previous questions navigation setting */}
+              <div style={{ paddingTop: '0.9rem', borderTop: '1px solid #f3e8d8' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '10px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    color: '#111',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={allowPrevious}
+                    onChange={(e) => setAllowPrevious(e.target.checked)}
+                    style={{
+                      marginTop: '3px',
+                      accentColor: '#173e30',
+                      width: 16,
+                      height: 16,
+                    }}
+                  />
+                  <div>
+                    <span>Allow students to go back to previous questions to recheck / reanswer</span>
+                    <p style={{ margin: '2px 0 0', fontSize: '0.75rem', fontWeight: 400, color: '#666' }}>
+                      {allowPrevious
+                        ? 'Students can freely return to earlier questions before final submission.'
+                        : 'Strict Sequential Mode: Students cannot return to or change answers on previous questions once they advance.'}
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              {/* 4. Single Attempt notification */}
+              <div
+                style={{
+                  background: '#f8faf7',
+                  border: '1px solid #e2ece2',
+                  borderRadius: '10px',
+                  padding: '8px 12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  fontSize: '0.76rem',
+                  color: '#284838',
+                }}
+              >
+                <CheckCircle2 style={{ width: 15, height: 15, color: '#15803d', flexShrink: 0 }} />
+                <span>
+                  <strong>Single Attempt Enforced:</strong> Each student can only start and submit this exam once. Multiple submissions are strictly blocked.
+                </span>
+              </div>
             </div>
           )}
         </div>

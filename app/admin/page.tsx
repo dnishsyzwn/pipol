@@ -23,6 +23,9 @@ import {
   Search,
   Send,
   ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  RotateCcw,
   Trash2,
   Users,
   X,
@@ -36,16 +39,18 @@ import {
   type User,
 } from 'firebase/auth';
 import { collection, deleteDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc, type Timestamp } from 'firebase/firestore';
-import { auth, db, googleProvider } from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { auth, db, functions, googleProvider, initializeSlearnAppCheck } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogMedia, AlertDialogTitle } from '@/components/ui/alert-dialog';
-import { Switch } from '@/components/ui/switch';
 import { SCHOOL_STAGES, SCHOOL_YEARS, type SchoolStage } from '@/lib/malaysia-curriculum';
 import './admin.css';
 
-type AdminTab = 'overview' | 'users' | 'classrooms' | 'subjects' | 'reports';
+type AdminTab = 'overview' | 'users' | 'classrooms' | 'subjects' | 'ai-quota' | 'reports';
+type ViewMode = 'admin' | 'teacher' | 'student';
+type ClassSort = 'name' | 'newest' | 'students' | 'progress';
 type UserRow = {
   id: string;
   displayName?: string;
@@ -87,6 +92,7 @@ type CatalogSubject = {
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 };
+type AiQuotaRow = { id: string; displayName: string; email: string; photoURL?: string; questionsUsed: number; imagesUsed: number };
 
 const ADMIN_EMAIL = 'admin@slearn.my';
 
@@ -95,6 +101,7 @@ const nav: { id: AdminTab; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'users', label: 'Users', icon: Users },
   { id: 'classrooms', label: 'Classrooms', icon: BookOpen },
   { id: 'subjects', label: 'Subjects', icon: BookOpen },
+  { id: 'ai-quota', label: 'AI quota', icon: Sparkles },
   { id: 'reports', label: 'Reports', icon: BarChart3 },
 ];
 
@@ -263,12 +270,24 @@ export default function AdminPage() {
   const [subjectYear, setSubjectYear] = useState(SCHOOL_YEARS.primary[0]);
   const [savingSubject, setSavingSubject] = useState(false);
   const [subjectError, setSubjectError] = useState('');
-  const [adminMode, setAdminMode] = useState(true);
   const [subjectToDelete, setSubjectToDelete] = useState<CatalogSubject | null>(null);
   const [deletingSubject, setDeletingSubject] = useState(false);
   const [search, setSearch] = useState('');
+  const [viewMode, setViewMode] = useState<ViewMode>('admin');
+  const [classCategory, setClassCategory] = useState('all');
+  const [classSort, setClassSort] = useState<ClassSort>('name');
+  const [userToDelete, setUserToDelete] = useState<UserRow | null>(null);
+  const [classToDelete, setClassToDelete] = useState<ClassroomRow | null>(null);
+  const [adminActionBusy, setAdminActionBusy] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [dataError, setDataError] = useState('');
+  const [quotaRows, setQuotaRows] = useState<AiQuotaRow[]>([]);
+  const [quotaLimits, setQuotaLimits] = useState({ questions: 15, images: 5 });
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const [quotaTarget, setQuotaTarget] = useState<AiQuotaRow | 'all' | null>(null);
+  const [quotaBusy, setQuotaBusy] = useState(false);
+
+  useEffect(() => { void initializeSlearnAppCheck(); }, []);
 
   useEffect(() => onAuthStateChanged(auth, async (nextUser) => {
     setUser(nextUser);
@@ -304,7 +323,6 @@ export default function AdminPage() {
   }, [status]);
 
   const openSubjectEditor = (subject?: CatalogSubject) => {
-    if (!adminMode) return;
     setEditingSubject(subject || null);
     setSubjectName(subject?.label || '');
     setSubjectStage(subject?.schoolStage || 'primary');
@@ -314,7 +332,7 @@ export default function AdminPage() {
   };
 
   const removeSubject = async () => {
-    if (!adminMode || !subjectToDelete) return;
+    if (!subjectToDelete) return;
     setDeletingSubject(true);
     setDataError('');
     try {
@@ -329,7 +347,7 @@ export default function AdminPage() {
 
   const saveSubject = async (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!user || !adminMode || !subjectName.trim()) return;
+    if (!user || !subjectName.trim()) return;
     setSavingSubject(true);
     setSubjectError('');
     try {
@@ -353,7 +371,7 @@ export default function AdminPage() {
   };
 
   const reviewSubject = async (proposal: SubjectProposal, approved: boolean) => {
-    if (!user || !adminMode) return;
+    if (!user) return;
     setReviewingSubject(proposal.id);
     setDataError('');
     try {
@@ -397,12 +415,94 @@ export default function AdminPage() {
 
   const filteredClasses = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return classrooms.filter((item) => !query || `${item.name || ''} ${item.subject || ''} ${item.code || ''} ${item.teacherName || ''}`.toLowerCase().includes(query));
-  }, [classrooms, search]);
+    return classrooms
+      .filter((item) => classCategory === 'all' || (item.subject || 'Uncategorised') === classCategory)
+      .filter((item) => !query || `${item.name || ''} ${item.subject || ''} ${item.code || ''} ${item.teacherName || ''}`.toLowerCase().includes(query))
+      .sort((a, b) => {
+        if (classSort === 'students') return (b.students || 0) - (a.students || 0);
+        if (classSort === 'progress') return (b.progress || 0) - (a.progress || 0);
+        if (classSort === 'newest') return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
+        return (a.name || '').localeCompare(b.name || '');
+      });
+  }, [classrooms, search, classCategory, classSort]);
+
+  const filteredSubjects = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return subjectCatalog.filter((item) => !query || `${item.label} ${item.schoolStage} ${item.schoolYear}`.toLowerCase().includes(query));
+  }, [subjectCatalog, search]);
+
+  const classCategories = useMemo(() => Array.from(new Set(classrooms.map((item) => item.subject || 'Uncategorised'))).sort(), [classrooms]);
+
+  const updateUserRole = async (target: UserRow, role: 'student' | 'teacher') => {
+    if (target.id === user?.uid || target.role === role) return;
+    setAdminActionBusy(`role-${target.id}`);
+    setDataError('');
+    try {
+      await httpsCallable(functions, 'adminUpdateUserRole')({ userId: target.id, role });
+    } catch {
+      setDataError('The user role could not be updated. Please try again.');
+    } finally {
+      setAdminActionBusy('');
+    }
+  };
+
+  const removeUser = async () => {
+    if (!userToDelete) return;
+    setAdminActionBusy(`delete-user-${userToDelete.id}`);
+    setDataError('');
+    try {
+      await httpsCallable(functions, 'adminDeleteUser')({ userId: userToDelete.id });
+      setUserToDelete(null);
+    } catch {
+      setDataError('The user could not be deleted. Please try again.');
+    } finally {
+      setAdminActionBusy('');
+    }
+  };
+
+  const removeClassroom = async () => {
+    if (!classToDelete) return;
+    setAdminActionBusy(`delete-class-${classToDelete.id}`);
+    setDataError('');
+    try {
+      await httpsCallable(functions, 'adminDeleteClassroom')({ classroomId: classToDelete.id });
+      setClassToDelete(null);
+    } catch {
+      setDataError('The classroom could not be deleted. Please try again.');
+    } finally {
+      setAdminActionBusy('');
+    }
+  };
+
+  const loadQuotas = async () => {
+    setQuotaLoading(true);
+    setDataError('');
+    try {
+      const result = await httpsCallable(functions, 'adminListAiQuotas')();
+      const payload = result.data as { teachers?: AiQuotaRow[]; questionLimit?: number; imageLimit?: number };
+      setQuotaRows(payload.teachers || []);
+      setQuotaLimits({ questions: payload.questionLimit || 15, images: payload.imageLimit || 5 });
+    } catch { setDataError('AI quota data could not be loaded. Please try again.'); }
+    finally { setQuotaLoading(false); }
+  };
+
+  const resetAiQuota = async () => {
+    if (!quotaTarget) return;
+    setQuotaBusy(true);
+    setDataError('');
+    try {
+      await httpsCallable(functions, 'adminResetAiQuota')(quotaTarget === 'all' ? { resetAll: true } : { userId: quotaTarget.id });
+      setQuotaTarget(null);
+      await loadQuotas();
+    } catch { setDataError('The AI quota could not be reset. Please try again.'); }
+    finally { setQuotaBusy(false); }
+  };
 
   const selectTab = (next: AdminTab) => {
     setTab(next);
+    if (next === 'ai-quota') void loadQuotas();
     setSearch('');
+    setClassCategory('all');
     setMenuOpen(false);
   };
 
@@ -422,8 +522,10 @@ export default function AdminPage() {
       </aside>
       {menuOpen && <button className="admin-scrim" onClick={() => setMenuOpen(false)} aria-label="Close menu" />}
       <section className="admin-content">
-        <header className="admin-topbar"><div><button className="admin-menu" onClick={() => setMenuOpen(true)} aria-label="Open menu"><Menu /></button><div><p className="admin-eyebrow">SLearn administration</p><h1>{currentTitle}</h1></div></div><div className="admin-top-actions"><div className={adminMode ? 'admin-mode active' : 'admin-mode'}><span><b>Admin mode</b><small>{adminMode ? 'Editing enabled' : 'View only'}</small></span><Switch checked={adminMode} onCheckedChange={(checked) => { setAdminMode(checked); if (!checked) { setSubjectEditorOpen(false); setSubjectToDelete(null); } }} aria-label="Toggle admin mode" /></div><div className="admin-live"><i /> Live data</div></div></header>
+        <header className="admin-topbar"><div><button className="admin-menu" onClick={() => setMenuOpen(true)} aria-label="Open menu"><Menu /></button><div><p className="admin-eyebrow">SLearn administration</p><h1>{viewMode === 'admin' ? currentTitle : `${viewMode === 'teacher' ? 'Teacher' : 'Student'} view`}</h1></div></div><div className="admin-top-actions"><div className="admin-view-toggle" aria-label="Preview role"><button className={viewMode === 'admin' ? 'active' : ''} onClick={() => setViewMode('admin')}>Admin</button><button className={viewMode === 'teacher' ? 'active' : ''} onClick={() => setViewMode('teacher')}>Teacher</button><button className={viewMode === 'student' ? 'active' : ''} onClick={() => setViewMode('student')}>Student</button></div><div className="admin-live"><i /> Live data</div></div></header>
         {dataError && <p className="admin-data-error"><CircleAlert /> {dataError}</p>}
+
+        {viewMode !== 'admin' ? <RolePreview key={viewMode} role={viewMode} classrooms={classrooms} users={users} /> : <>
 
         {tab === 'overview' && <>
           <section className="admin-welcome"><div><p className="admin-eyebrow">Platform pulse</p><h2>Everything in one calm view.</h2><p>Monitor growth, classroom activity and the learning community without stepping into their workspace.</p></div><span><GraduationCap /></span></section>
@@ -439,19 +541,25 @@ export default function AdminPage() {
           </section>
         </>}
 
-        {tab === 'users' && <section className="admin-panel admin-directory"><DirectoryHead eyebrow={`${users.length} accounts`} title="User directory" value={search} onChange={setSearch} placeholder="Search name, email or role" />{filteredUsers.length ? <div className="admin-table"><div className="admin-table-head"><span>User</span><span>Role</span><span>Joined</span><span>Status</span></div>{filteredUsers.map((item) => <div className="admin-table-row" key={item.id}><div className="admin-user-cell"><Avatar photo={item.photoURL} name={item.displayName || item.email} /><div><b>{item.displayName || 'New user'}</b><small>{item.email || 'No email'}</small></div></div><span><em className={`role-pill ${item.role || 'user'}`}>{item.role || 'user'}</em></span><span>{dateLabel(item.createdAt)}</span><span className="active-status"><i /> Active</span></div>)}</div> : <EmptyState icon={Search} title="No matching users" text="Try a different name, email or role." />}</section>}
+        {tab === 'users' && <section className="admin-panel admin-directory"><DirectoryHead eyebrow={`${users.length} accounts`} title="User directory" value={search} onChange={setSearch} placeholder="Search name, email or role" />{filteredUsers.length ? <div className="admin-table admin-user-table"><div className="admin-table-head"><span>User</span><span>Role</span><span>Joined</span><span>Status</span><span>Actions</span></div>{filteredUsers.map((item) => <div className="admin-table-row" key={item.id}><div className="admin-user-cell"><Avatar photo={item.photoURL} name={item.displayName || item.email} /><div><b>{item.displayName || 'New user'}</b><small>{item.email || 'No email'}</small></div></div><span>{item.role === 'admin' ? <em className="role-pill admin">admin</em> : <select className="admin-role-select" value={item.role === 'teacher' ? 'teacher' : 'student'} disabled={adminActionBusy === `role-${item.id}`} onChange={(event) => void updateUserRole(item, event.target.value as 'student' | 'teacher')}><option value="student">Student</option><option value="teacher">Teacher</option></select>}</span><span>{dateLabel(item.createdAt)}</span><span className="active-status"><i /> Active</span><span><button className="admin-row-delete" disabled={item.id === user?.uid || Boolean(adminActionBusy)} onClick={() => setUserToDelete(item)} aria-label={`Delete ${item.displayName || item.email}`}><Trash2 /> Delete</button></span></div>)}</div> : <EmptyState icon={Search} title="No matching users" text="Try a different name, email or role." />}</section>}
 
-        {tab === 'classrooms' && <section className="admin-panel admin-directory"><DirectoryHead eyebrow={`${classrooms.length} learning spaces`} title="Classroom directory" value={search} onChange={setSearch} placeholder="Search classroom, teacher or code" />{filteredClasses.length ? <div className="admin-class-grid">{filteredClasses.map((item, index) => <article className={`admin-class-card tone-${index % 4}`} key={item.id}><div className="admin-class-top"><span><BookOpen /></span><em>{item.code || 'NO-CODE'}</em></div><small>{item.subject || 'General learning'}</small><h3>{item.name || 'Untitled classroom'}</h3><p>Led by {item.teacherName || 'Teacher'}</p><div className="admin-class-metrics"><span><Users /> {item.students || 0}/{item.maxStudents || 30}</span><b>{item.progress || 0}% progress</b></div><div className="admin-progress"><i style={{ width: `${Math.min(100, item.progress || 0)}%` }} /></div></article>)}</div> : <EmptyState icon={Search} title="No matching classrooms" text="Try another classroom name, teacher or code." />}</section>}
+        {tab === 'classrooms' && <section className="admin-panel admin-directory"><div className="admin-directory-head admin-class-directory-head"><div><p className="admin-eyebrow">{filteredClasses.length} of {classrooms.length} learning spaces</p><h2>Classroom directory</h2></div><div className="admin-directory-tools"><label className="admin-search"><Search /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search classroom, teacher or code" /></label><label className="admin-filter"><BookOpen /><select value={classCategory} onChange={(event) => setClassCategory(event.target.value)} aria-label="Filter by subject"><option value="all">All subjects</option>{classCategories.map((category) => <option value={category} key={category}>{category}</option>)}</select></label><label className="admin-filter"><SlidersHorizontal /><select value={classSort} onChange={(event) => setClassSort(event.target.value as ClassSort)} aria-label="Sort classrooms"><option value="name">Name A–Z</option><option value="newest">Newest first</option><option value="students">Most students</option><option value="progress">Highest progress</option></select></label></div></div>{filteredClasses.length ? <div className="admin-class-grid">{filteredClasses.map((item, index) => <article className={`admin-class-card tone-${index % 4}`} key={item.id}><div className="admin-class-top"><span><BookOpen /></span><div><em>{item.code || 'NO-CODE'}</em><button className="admin-class-delete" onClick={() => setClassToDelete(item)} aria-label={`Delete ${item.name || 'classroom'}`}><Trash2 /></button></div></div><small>{item.subject || 'General learning'}</small><h3>{item.name || 'Untitled classroom'}</h3><p>Led by {item.teacherName || 'Teacher'}</p><div className="admin-class-metrics"><span><Users /> {item.students || 0}/{item.maxStudents || 30}</span><b>{item.progress || 0}% progress</b></div><div className="admin-progress"><i style={{ width: `${Math.min(100, item.progress || 0)}%` }} /></div></article>)}</div> : <EmptyState icon={Search} title="No matching classrooms" text="Try another search, subject category or sorting option." />}</section>}
 
         {tab === 'subjects' && <section className="admin-subject-space">
           <section className="admin-panel admin-subject-catalog">
-            <div className="admin-directory-head"><div><p className="admin-eyebrow">{subjectCatalog.length} custom subjects</p><h2>Subject management</h2></div><button className="admin-primary admin-add-subject" disabled={!adminMode} onClick={() => openSubjectEditor()}><Plus /> Add subject</button></div>
-            {subjectCatalog.length ? <div className="admin-subject-grid">{subjectCatalog.slice().sort((a, b) => a.label.localeCompare(b.label)).map((item) => <article className="admin-subject-card" key={item.id}><span><BookOpen /></span><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Available to teachers creating or editing classrooms.</p></div><div className="admin-subject-actions"><button disabled={!adminMode} onClick={() => openSubjectEditor(item)} aria-label={`Edit ${item.label}`}><Pencil /> Edit</button><button className="admin-delete-subject" disabled={!adminMode} onClick={() => setSubjectToDelete(item)} aria-label={`Delete ${item.label}`}><Trash2 /> Delete</button></div></article>)}</div> : <EmptyState icon={BookOpen} title="No custom subjects yet" text="Add a subject to make it available to teachers." />}
+            <div className="admin-directory-head"><div><p className="admin-eyebrow">{filteredSubjects.length} of {subjectCatalog.length} custom subjects</p><h2>Subject management</h2></div><div className="admin-subject-head-tools"><label className="admin-search"><Search /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search subject, level or year" /></label><button className="admin-primary admin-add-subject" onClick={() => openSubjectEditor()}><Plus /> Add subject</button></div></div>
+            {filteredSubjects.length ? <div className="admin-subject-grid">{filteredSubjects.slice().sort((a, b) => a.label.localeCompare(b.label)).map((item) => <article className="admin-subject-card" key={item.id}><span><BookOpen /></span><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Available to teachers creating or editing classrooms.</p></div><div className="admin-subject-actions"><button onClick={() => openSubjectEditor(item)} aria-label={`Edit ${item.label}`}><Pencil /> Edit</button><button className="admin-delete-subject" onClick={() => setSubjectToDelete(item)} aria-label={`Delete ${item.label}`}><Trash2 /> Delete</button></div></article>)}</div> : <EmptyState icon={Search} title="No matching subjects" text="Try another subject name, school level or year." />}
           </section>
           <section className="admin-panel admin-subject-requests">
             <div className="admin-panel-head"><div><p className="admin-eyebrow">{subjectProposals.filter((item) => item.status === 'pending').length} pending</p><h3>Teacher requests</h3></div></div>
-            <div className="subject-request-list">{subjectProposals.filter((item) => item.status === 'pending').length ? subjectProposals.filter((item) => item.status === 'pending').map((item) => <article className="subject-request-card" key={item.id}><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Requested by {item.requesterName || item.requesterEmail || 'Teacher'} · {dateLabel(item.createdAt)}</p></div><div><button className="subject-reject" disabled={!adminMode || reviewingSubject === item.id} onClick={() => reviewSubject(item, false)}><X /> Reject</button><button className="admin-primary" disabled={!adminMode || reviewingSubject === item.id} onClick={() => reviewSubject(item, true)}>{reviewingSubject === item.id ? <LoaderCircle className="spin" /> : <Check />} Approve</button></div></article>) : <EmptyState icon={Check} title="No pending requests" text="New teacher-submitted subjects will appear here." />}</div>
+            <div className="subject-request-list">{subjectProposals.filter((item) => item.status === 'pending').length ? subjectProposals.filter((item) => item.status === 'pending').map((item) => <article className="subject-request-card" key={item.id}><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Requested by {item.requesterName || item.requesterEmail || 'Teacher'} · {dateLabel(item.createdAt)}</p></div><div><button className="subject-reject" disabled={reviewingSubject === item.id} onClick={() => reviewSubject(item, false)}><X /> Reject</button><button className="admin-primary" disabled={reviewingSubject === item.id} onClick={() => reviewSubject(item, true)}>{reviewingSubject === item.id ? <LoaderCircle className="spin" /> : <Check />} Approve</button></div></article>) : <EmptyState icon={Check} title="No pending requests" text="New teacher-submitted subjects will appear here." />}</div>
           </section>
+        </section>}
+
+        {tab === 'ai-quota' && <section className="admin-panel admin-directory admin-quota-directory">
+          <div className="admin-directory-head"><div><p className="admin-eyebrow">Weekly AI allowance</p><h2>AI quota management</h2><p className="admin-directory-copy">Monitor question and image generation credits for every teacher.</p></div><button className="admin-primary admin-reset-all" disabled={quotaLoading || quotaRows.length === 0} onClick={() => setQuotaTarget('all')}><RotateCcw /> Reset all teachers</button></div>
+          <div className="admin-quota-summary"><article><Sparkles /><span><small>QUESTION LIMIT</small><strong>{quotaLimits.questions}</strong><p>per teacher, weekly</p></span></article><article><BookOpen /><span><small>IMAGE LIMIT</small><strong>{quotaLimits.images}</strong><p>per teacher, weekly</p></span></article></div>
+          {quotaLoading ? <div className="admin-quota-loading"><LoaderCircle className="spin" /> Loading teacher quotas…</div> : quotaRows.length ? <div className="admin-quota-list">{quotaRows.map((item) => <article className="admin-quota-card" key={item.id}><div className="admin-quota-person"><Avatar photo={item.photoURL} name={item.displayName || item.email} /><div><b>{item.displayName}</b><small>{item.email || 'No email'}</small></div></div><QuotaMeter label="Questions" used={item.questionsUsed} limit={quotaLimits.questions} /><QuotaMeter label="Images" used={item.imagesUsed} limit={quotaLimits.images} image /><button className="admin-quota-reset" onClick={() => setQuotaTarget(item)}><RotateCcw /> Reset quota</button></article>)}</div> : <EmptyState icon={Sparkles} title="No teachers yet" text="Teacher AI usage will appear here after an account is created." />}
         </section>}
 
         {tab === 'reports' && <>
@@ -481,9 +589,40 @@ export default function AdminPage() {
             <AlertDialogFooter><AlertDialogCancel disabled={deletingSubject}>Cancel</AlertDialogCancel><AlertDialogAction className="admin-confirm-delete" disabled={deletingSubject} onClick={() => void removeSubject()}>{deletingSubject ? <LoaderCircle className="spin" /> : <Trash2 />} Delete subject</AlertDialogAction></AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+        <AlertDialog open={Boolean(userToDelete)} onOpenChange={(open) => { if (!open && !adminActionBusy) setUserToDelete(null); }}>
+          <AlertDialogContent className="admin-delete-dialog"><AlertDialogHeader><AlertDialogMedia><Trash2 /></AlertDialogMedia><AlertDialogTitle>Delete {userToDelete?.displayName || userToDelete?.email}?</AlertDialogTitle><AlertDialogDescription>This permanently removes the account, its profile, memberships and pending join requests. This action cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={Boolean(adminActionBusy)}>Cancel</AlertDialogCancel><AlertDialogAction className="admin-confirm-delete" disabled={Boolean(adminActionBusy)} onClick={() => void removeUser()}>{adminActionBusy ? <LoaderCircle className="spin" /> : <Trash2 />} Delete user</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+        </AlertDialog>
+        <AlertDialog open={Boolean(classToDelete)} onOpenChange={(open) => { if (!open && !adminActionBusy) setClassToDelete(null); }}>
+          <AlertDialogContent className="admin-delete-dialog"><AlertDialogHeader><AlertDialogMedia><Trash2 /></AlertDialogMedia><AlertDialogTitle>Delete {classToDelete?.name}?</AlertDialogTitle><AlertDialogDescription>This permanently removes the classroom, exercises, submissions, memberships and pending requests. This action cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={Boolean(adminActionBusy)}>Cancel</AlertDialogCancel><AlertDialogAction className="admin-confirm-delete" disabled={Boolean(adminActionBusy)} onClick={() => void removeClassroom()}>{adminActionBusy ? <LoaderCircle className="spin" /> : <Trash2 />} Delete classroom</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+        </AlertDialog>
+        <AlertDialog open={Boolean(quotaTarget)} onOpenChange={(open) => { if (!open && !quotaBusy) setQuotaTarget(null); }}>
+          <AlertDialogContent className="admin-delete-dialog admin-quota-dialog"><AlertDialogHeader><AlertDialogMedia><RotateCcw /></AlertDialogMedia><AlertDialogTitle>{quotaTarget === 'all' ? 'Reset every teacher quota?' : `Reset ${quotaTarget && typeof quotaTarget !== 'string' ? quotaTarget.displayName : 'teacher'}’s quota?`}</AlertDialogTitle><AlertDialogDescription>This immediately restores all weekly question and image generation credits. The normal weekly reset schedule will stay the same.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={quotaBusy}>Cancel</AlertDialogCancel><AlertDialogAction className="admin-confirm-reset" disabled={quotaBusy} onClick={() => void resetAiQuota()}>{quotaBusy ? <LoaderCircle className="spin" /> : <RotateCcw />} Reset quota</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+        </AlertDialog>
+        </>}
       </section>
     </main>
   );
+}
+
+function RolePreview({ role, classrooms, users }: { role: 'teacher' | 'student'; classrooms: ClassroomRow[]; users: UserRow[] }) {
+  const [page, setPage] = useState<'dashboard' | 'classrooms' | 'progress' | 'profile'>('dashboard');
+  const teachers = users.filter((item) => item.role === 'teacher').length;
+  const students = users.filter((item) => item.role === 'student').length;
+  const sample = classrooms.slice(0, page === 'classrooms' ? classrooms.length : 3);
+  const averageProgress = classrooms.length ? Math.round(classrooms.reduce((sum, item) => sum + (item.progress || 0), 0) / classrooms.length) : 0;
+  const pages = [{ id: 'dashboard', label: 'Home', icon: LayoutDashboard }, { id: 'classrooms', label: 'Classrooms', icon: BookOpen }, { id: 'progress', label: 'Progress', icon: BarChart3 }, { id: 'profile', label: 'Profile', icon: Users }] as const;
+  return <section className={`admin-role-preview ${role}`}>
+    <nav className="admin-preview-nav">{pages.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? 'active' : ''} onClick={() => setPage(id)}><Icon />{label}</button>)}<span><Eye /> Read-only preview</span></nav>
+    {page === 'dashboard' && <><div className="admin-preview-banner"><div><p className="admin-eyebrow">{role} home</p><h2>{role === 'teacher' ? 'Ready to teach?' : 'Ready to learn?'}</h2><p>{role === 'teacher' ? 'Review classrooms, learner activity and teaching progress.' : 'Continue learning, check classes and follow your progress.'}</p></div><span>{role === 'teacher' ? <GraduationCap /> : <BookOpen />}</span></div><div className="admin-preview-stats"><article><small>{role === 'teacher' ? 'YOUR CLASSROOMS' : 'MY CLASSROOMS'}</small><strong>{classrooms.length}</strong></article><article><small>{role === 'teacher' ? 'TOTAL LEARNERS' : 'OVERALL PROGRESS'}</small><strong>{role === 'teacher' ? students : `${averageProgress}%`}</strong></article><article><small>{role === 'teacher' ? 'ACTIVE STUDENTS' : 'TEACHERS'}</small><strong>{role === 'teacher' ? students : teachers}</strong></article></div></>}
+    {(page === 'dashboard' || page === 'classrooms') && <div className="admin-panel"><div className="admin-panel-head"><div><p className="admin-eyebrow">{page === 'classrooms' ? 'All learning spaces' : 'Role experience'}</p><h3>{role === 'teacher' ? 'Classroom overview' : 'My learning spaces'}</h3></div>{page === 'dashboard' && <button onClick={() => setPage('classrooms')}>View all <ChevronRight /></button>}</div>{sample.length ? <div className="admin-class-grid">{sample.map((item, index) => <article className={`admin-class-card tone-${index % 4}`} key={item.id}><div className="admin-class-top"><span><BookOpen /></span><em>{item.code || 'CLASS'}</em></div><small>{item.subject || 'General learning'}</small><h3>{item.name || 'Classroom'}</h3><p>{role === 'teacher' ? `${item.students || 0} learners enrolled` : `Teacher · ${item.teacherName || 'Teacher'}`}</p><div className="admin-class-metrics"><span><Users /> {item.students || 0}</span><b>{item.progress || 0}% progress</b></div><div className="admin-progress"><i style={{ width: `${item.progress || 0}%` }} /></div></article>)}</div> : <EmptyState icon={BookOpen} title="No classrooms to preview" text="Classrooms will appear here once created." />}</div>}
+    {page === 'progress' && <div className="admin-panel admin-preview-detail"><div className="admin-panel-head"><div><p className="admin-eyebrow">Learning performance</p><h3>{role === 'teacher' ? 'Class progress overview' : 'My progress'}</h3></div><strong>{averageProgress}% average</strong></div>{classrooms.length ? classrooms.map((item) => <div className="admin-progress-row" key={item.id}><span>{item.name || 'Untitled classroom'}</span><div className="admin-progress"><i style={{ width: `${Math.min(100, item.progress || 0)}%` }} /></div><b>{item.progress || 0}%</b></div>) : <EmptyState icon={BarChart3} title="No progress data" text="Progress will appear after classroom activities begin." />}</div>}
+    {page === 'profile' && <div className="admin-panel admin-preview-profile"><div className="admin-preview-avatar">A</div><div><p className="admin-eyebrow">Preview account</p><h2>{role === 'teacher' ? 'Teacher profile' : 'Student profile'}</h2><p>This preview shows the profile area without changing the administrator account or another user’s data.</p><div className="admin-profile-fields"><div>Display name<span>Administrator preview</span></div><div>Account role<span className={`role-pill ${role}`}>{role}</span></div><div>Access mode<span>Read only</span></div></div></div></div>}
+  </section>;
+}
+
+function QuotaMeter({ label, used, limit, image = false }: { label: string; used: number; limit: number; image?: boolean }) {
+  const percent = Math.min(100, limit ? used / limit * 100 : 0);
+  return <div className="admin-quota-meter"><div><span>{label}</span><b>{used}/{limit} used</b></div><div className={`admin-progress${image ? ' image' : ''}`}><i style={{ width: `${percent}%` }} /></div></div>;
 }
 
 function EmptyState({ icon: Icon, title, text }: { icon: typeof BookOpen; title: string; text: string }) {

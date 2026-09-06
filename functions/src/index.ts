@@ -4,9 +4,9 @@ import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { onCall, type CallableRequest } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import { config, providerSecrets } from './config.js';
-import { bucket, db } from './firebase.js';
+import { adminAuth, bucket, db } from './firebase.js';
 import { denied, failed, internal, invalid, unavailable } from './errors.js';
-import { requireAuth, requireClassroomMember, requireClassroomOwner, requireTeacher } from './auth.js';
+import { assertSafeId, requireAdmin, requireAuth, requireClassroomMember, requireClassroomOwner, requireTeacher } from './auth.js';
 import { extractMaterial, extensionOf, supportedExtensions } from './content.js';
 import { generateImage, generateQuiz, testVertexConnection, transformQuestion } from './provider.js';
 import { assertGenerationInput, assertImagePromptAllowed, markSensitiveReview } from './safety.js';
@@ -24,10 +24,97 @@ import {
   removeUndefinedValues,
   validateQuestionSet,
 } from './schemas.js';
-import { refundReservation, reserveQuota, settleQuota, type QuotaReservation } from './quota.js';
+import { refundReservation, reserveQuota, resetQuota, settleQuota, type QuotaReservation } from './quota.js';
 import type { QuizQuestion } from './types.js';
 
 setGlobalOptions({ region: 'asia-southeast1', maxInstances: 10, enforceAppCheck: true });
+
+export const adminUpdateUserRole = onCall(async (request) => {
+  const admin = await requireAdmin(request);
+  const input = request.data as { userId?: unknown; role?: unknown };
+  const userId = assertSafeId(String(input.userId ?? ''), 'User');
+  const role = String(input.role ?? '');
+  if (userId === admin.uid) denied('You cannot change your own administrator role.');
+  if (!['student', 'teacher'].includes(role)) invalid('Role must be student or teacher.');
+  const userRef = db.collection('users').doc(userId);
+  const user = await userRef.get();
+  if (!user.exists) failed('User not found.');
+  await userRef.update({ role, roleUpdatedBy: admin.uid, roleUpdatedAt: FieldValue.serverTimestamp() });
+  return { ok: true };
+});
+
+export const adminDeleteUser = onCall(async (request) => {
+  const admin = await requireAdmin(request);
+  const userId = assertSafeId(String((request.data as { userId?: unknown }).userId ?? ''), 'User');
+  if (userId === admin.uid) denied('You cannot delete your own administrator account.');
+  const classrooms = await db.collection('classrooms').get();
+  const writer = db.bulkWriter();
+  for (const classroom of classrooms.docs) {
+    const memberRef = classroom.ref.collection('members').doc(userId);
+    const member = await memberRef.get();
+    if (member.exists) {
+      writer.delete(memberRef);
+      writer.update(classroom.ref, { students: FieldValue.increment(-1) });
+    }
+    writer.delete(classroom.ref.collection('requests').doc(userId));
+  }
+  await writer.close();
+  await db.recursiveDelete(db.collection('users').doc(userId));
+  try { await adminAuth.deleteUser(userId); } catch (error) {
+    if ((error as { code?: string }).code !== 'auth/user-not-found') throw error;
+  }
+  return { ok: true };
+});
+
+export const adminDeleteClassroom = onCall(async (request) => {
+  await requireAdmin(request);
+  const classroomId = assertSafeId(String((request.data as { classroomId?: unknown }).classroomId ?? ''), 'Classroom');
+  const classroomRef = db.collection('classrooms').doc(classroomId);
+  const classroom = await classroomRef.get();
+  if (!classroom.exists) failed('Classroom not found.');
+  const users = await db.collection('users').get();
+  const writer = db.bulkWriter();
+  for (const user of users.docs) {
+    writer.delete(user.ref.collection('memberships').doc(classroomId));
+    writer.delete(user.ref.collection('joinRequests').doc(classroomId));
+  }
+  await writer.close();
+  await db.recursiveDelete(classroomRef);
+  return { ok: true };
+});
+
+export const adminListAiQuotas = onCall(async (request) => {
+  await requireAdmin(request);
+  const [users, usage] = await Promise.all([
+    db.collection('users').where('role', '==', 'teacher').get(),
+    db.collection('usage').get(),
+  ]);
+  const usageById = new Map(usage.docs.map((item) => [item.id, item.data()]));
+  return {
+    questionLimit: config.questionQuota,
+    imageLimit: config.imageQuota,
+    teachers: users.docs.map((item) => {
+      const profile = item.data();
+      const quota = usageById.get(item.id);
+      return { id: item.id, displayName: String(profile.displayName || 'Teacher'), email: String(profile.email || ''), photoURL: String(profile.photoURL || ''), questionsUsed: Number(quota?.questionsUsed || 0), imagesUsed: Number(quota?.imagesUsed || 0), nextResetAt: quota?.nextResetAt || null };
+    }),
+  };
+});
+
+export const adminResetAiQuota = onCall(async (request) => {
+  const admin = await requireAdmin(request);
+  const input = request.data as { userId?: unknown; resetAll?: unknown };
+  if (input.resetAll === true) {
+    const teachers = await db.collection('users').where('role', '==', 'teacher').get();
+    await Promise.all(teachers.docs.map((teacher) => resetQuota(teacher.id, admin.uid)));
+    return { ok: true, resetCount: teachers.size };
+  }
+  const userId = assertSafeId(String(input.userId ?? ''), 'User');
+  const teacher = await db.collection('users').doc(userId).get();
+  if (!teacher.exists || teacher.get('role') !== 'teacher') failed('Teacher not found.');
+  await resetQuota(userId, admin.uid);
+  return { ok: true, resetCount: 1 };
+});
 
 export const testAiConnection = onCall({ secrets: providerSecrets }, async (request) => {
   await requireTeacher(request);
@@ -199,14 +286,21 @@ export const processQuizGenerationJob = onDocumentCreated(
         questionTypes: (settings.questionTypes as string[]) ?? ['multiple_choice', 'short_answer'],
         learningObjectives: (settings.learningObjectives as string[]) ?? [],
         imageMode: String(settings.imageMode ?? 'none') as 'none' | 'upload' | 'generate',
+        imageCount: Number(settings.imageMode === 'generate' ? settings.imageCount ?? 0 : 0),
         existingTags,
       });
       const parsed = GeneratedQuizSchema.parse(generated);
-      const questions = validateQuestionSet(parsed.questions.slice(0, Number(settings.questionCount))).map((question) => ({
-        ...question,
-        id: question.id || randomUUID(),
-        needsReview: question.needsReview || markSensitiveReview(`${question.question} ${question.explanation}`),
-      }));
+      const questions = validateQuestionSet(parsed.questions.slice(0, Number(settings.questionCount))).map((question) => {
+        // A model must not be able to smuggle in a phantom diagram reference.
+        // Visual metadata is attached below only after an image quota reservation
+        // has produced a real asset for that question.
+        const { visual: _modelVisual, ...questionWithoutVisual } = question;
+        return {
+          ...questionWithoutVisual,
+          id: question.id || randomUUID(),
+          needsReview: question.needsReview || markSensitiveReview(`${question.question} ${question.explanation}`),
+        } as QuizQuestion;
+      });
       const draftRef = db.collection('quizDrafts').doc();
       const requestedImages = settings.imageMode === 'generate' ? Math.min(Number(settings.imageCount ?? 0), questions.length) : 0;
       let generatedImages = 0;

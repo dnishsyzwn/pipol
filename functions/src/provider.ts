@@ -17,6 +17,7 @@ type GenerationInput = {
   questionTypes: string[];
   learningObjectives: string[];
   imageMode: ImageMode;
+  imageCount: number;
   existingTags: Array<{ id: string; kind: string; label: string }>;
 };
 
@@ -92,8 +93,12 @@ function promptForQuiz(input: GenerationInput): string {
         : `Every question should use ${input.difficulty} difficulty unless correctness requires a safer interpretation.`,
       'Sensitive educational topics may be handled neutrally and factually, but never create sexualized, pornographic, exploitative, or graphic content.',
       'Every question should include a sourceReference when the material supports it.',
+      'If you create a statement-based question, include the complete statement as quoted or clearly labelled text inside the question field itself. Never write only "the statement above", "the statement below", "according to the statement", or "answer part b" when the learner cannot see that statement in the question. A source reference is not a visible statement.',
       'Tag every question with one primary topic, an optional subtopic, and one or more assessed skills.',
       'Reuse the supplied classroom tag labels and IDs whenever they fit. Only suggest a clear new tag when no existing tag is suitable.',
+      input.imageCount > 0
+        ? `Only the first ${input.imageCount} question${input.imageCount === 1 ? '' : 's'} will receive an attached/generated visual. A question may refer to a diagram, image, chart, figure, activity, or part only when that visual is attached to that exact question. Never refer to a visual on any later question.`
+        : 'No image quota is being used. Every question must be completely standalone and answerable from its own wording. Do not refer to a diagram, image, chart, figure, activity, part, page, slide, or other visual from the source material. Do not write phrases such as "based on Activity 1", "refer to the diagram", or "answer part b".',
     ].join(' '),
     task: 'Create a quiz draft from this teacher request and source material.',
     teacherRequest: input.prompt,
@@ -106,6 +111,7 @@ function promptForQuiz(input: GenerationInput): string {
       questionTypes: input.questionTypes,
       learningObjectives: input.learningObjectives,
       imageMode: input.imageMode,
+      imageCount: input.imageCount,
       existingClassroomTags: input.existingTags,
     },
     sourceSummary: input.sourceSummary,
@@ -188,7 +194,7 @@ export async function generateImage(prompt: string, level: string): Promise<{ by
 export async function transformQuestion(question: QuizQuestion, operation: string, language?: string): Promise<QuizQuestion> {
   if (config.dryRun) return { ...question, needsReview: true, confidence: 'low' };
   const input = JSON.stringify({
-    system: 'Return one JSON quiz question. Preserve correctness. The teacher must review the result before publishing.',
+    system: 'Return one JSON quiz question. Preserve correctness. The teacher must review the result before publishing. If the question uses a statement, passage, scenario, table, or data, include the complete content needed to answer inside the question field. Never leave a dangling reference such as "the statement above", "the statement below", "Activity 1", or "part b" unless that referenced content is included in the same question field.',
     operation,
     language,
     question,
