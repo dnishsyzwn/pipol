@@ -24,6 +24,8 @@ import {
   Send,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
+  RotateCcw,
   Trash2,
   Users,
   X,
@@ -46,7 +48,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { SCHOOL_STAGES, SCHOOL_YEARS, type SchoolStage } from '@/lib/malaysia-curriculum';
 import './admin.css';
 
-type AdminTab = 'overview' | 'users' | 'classrooms' | 'subjects' | 'reports';
+type AdminTab = 'overview' | 'users' | 'classrooms' | 'subjects' | 'ai-quota' | 'reports';
 type ViewMode = 'admin' | 'teacher' | 'student';
 type ClassSort = 'name' | 'newest' | 'students' | 'progress';
 type UserRow = {
@@ -90,6 +92,7 @@ type CatalogSubject = {
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 };
+type AiQuotaRow = { id: string; displayName: string; email: string; photoURL?: string; questionsUsed: number; imagesUsed: number };
 
 const ADMIN_EMAIL = 'admin@slearn.my';
 
@@ -98,6 +101,7 @@ const nav: { id: AdminTab; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'users', label: 'Users', icon: Users },
   { id: 'classrooms', label: 'Classrooms', icon: BookOpen },
   { id: 'subjects', label: 'Subjects', icon: BookOpen },
+  { id: 'ai-quota', label: 'AI quota', icon: Sparkles },
   { id: 'reports', label: 'Reports', icon: BarChart3 },
 ];
 
@@ -277,6 +281,11 @@ export default function AdminPage() {
   const [adminActionBusy, setAdminActionBusy] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [dataError, setDataError] = useState('');
+  const [quotaRows, setQuotaRows] = useState<AiQuotaRow[]>([]);
+  const [quotaLimits, setQuotaLimits] = useState({ questions: 15, images: 5 });
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const [quotaTarget, setQuotaTarget] = useState<AiQuotaRow | 'all' | null>(null);
+  const [quotaBusy, setQuotaBusy] = useState(false);
 
   useEffect(() => { void initializeSlearnAppCheck(); }, []);
 
@@ -465,8 +474,33 @@ export default function AdminPage() {
     }
   };
 
+  const loadQuotas = async () => {
+    setQuotaLoading(true);
+    setDataError('');
+    try {
+      const result = await httpsCallable(functions, 'adminListAiQuotas')();
+      const payload = result.data as { teachers?: AiQuotaRow[]; questionLimit?: number; imageLimit?: number };
+      setQuotaRows(payload.teachers || []);
+      setQuotaLimits({ questions: payload.questionLimit || 15, images: payload.imageLimit || 5 });
+    } catch { setDataError('AI quota data could not be loaded. Please try again.'); }
+    finally { setQuotaLoading(false); }
+  };
+
+  const resetAiQuota = async () => {
+    if (!quotaTarget) return;
+    setQuotaBusy(true);
+    setDataError('');
+    try {
+      await httpsCallable(functions, 'adminResetAiQuota')(quotaTarget === 'all' ? { resetAll: true } : { userId: quotaTarget.id });
+      setQuotaTarget(null);
+      await loadQuotas();
+    } catch { setDataError('The AI quota could not be reset. Please try again.'); }
+    finally { setQuotaBusy(false); }
+  };
+
   const selectTab = (next: AdminTab) => {
     setTab(next);
+    if (next === 'ai-quota') void loadQuotas();
     setSearch('');
     setClassCategory('all');
     setMenuOpen(false);
@@ -522,6 +556,12 @@ export default function AdminPage() {
           </section>
         </section>}
 
+        {tab === 'ai-quota' && <section className="admin-panel admin-directory admin-quota-directory">
+          <div className="admin-directory-head"><div><p className="admin-eyebrow">Weekly AI allowance</p><h2>AI quota management</h2><p className="admin-directory-copy">Monitor question and image generation credits for every teacher.</p></div><button className="admin-primary admin-reset-all" disabled={quotaLoading || quotaRows.length === 0} onClick={() => setQuotaTarget('all')}><RotateCcw /> Reset all teachers</button></div>
+          <div className="admin-quota-summary"><article><Sparkles /><span><small>QUESTION LIMIT</small><strong>{quotaLimits.questions}</strong><p>per teacher, weekly</p></span></article><article><BookOpen /><span><small>IMAGE LIMIT</small><strong>{quotaLimits.images}</strong><p>per teacher, weekly</p></span></article></div>
+          {quotaLoading ? <div className="admin-quota-loading"><LoaderCircle className="spin" /> Loading teacher quotas…</div> : quotaRows.length ? <div className="admin-quota-list">{quotaRows.map((item) => <article className="admin-quota-card" key={item.id}><div className="admin-quota-person"><Avatar photo={item.photoURL} name={item.displayName || item.email} /><div><b>{item.displayName}</b><small>{item.email || 'No email'}</small></div></div><QuotaMeter label="Questions" used={item.questionsUsed} limit={quotaLimits.questions} /><QuotaMeter label="Images" used={item.imagesUsed} limit={quotaLimits.images} image /><button className="admin-quota-reset" onClick={() => setQuotaTarget(item)}><RotateCcw /> Reset quota</button></article>)}</div> : <EmptyState icon={Sparkles} title="No teachers yet" text="Teacher AI usage will appear here after an account is created." />}
+        </section>}
+
         {tab === 'reports' && <>
           <section className="admin-report-grid">
             <article className="admin-report-card"><p className="admin-eyebrow">Community mix</p><h3>Users by role</h3><ReportBar label="Students" value={stats.students} total={Math.max(users.length, 1)} colour="mint" /><ReportBar label="Teachers" value={stats.teachers} total={Math.max(users.length, 1)} colour="peach" /><ReportBar label="Administrators" value={users.filter((item) => item.role === 'admin').length} total={Math.max(users.length, 1)} colour="black" /></article>
@@ -555,6 +595,9 @@ export default function AdminPage() {
         <AlertDialog open={Boolean(classToDelete)} onOpenChange={(open) => { if (!open && !adminActionBusy) setClassToDelete(null); }}>
           <AlertDialogContent className="admin-delete-dialog"><AlertDialogHeader><AlertDialogMedia><Trash2 /></AlertDialogMedia><AlertDialogTitle>Delete {classToDelete?.name}?</AlertDialogTitle><AlertDialogDescription>This permanently removes the classroom, exercises, submissions, memberships and pending requests. This action cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={Boolean(adminActionBusy)}>Cancel</AlertDialogCancel><AlertDialogAction className="admin-confirm-delete" disabled={Boolean(adminActionBusy)} onClick={() => void removeClassroom()}>{adminActionBusy ? <LoaderCircle className="spin" /> : <Trash2 />} Delete classroom</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
         </AlertDialog>
+        <AlertDialog open={Boolean(quotaTarget)} onOpenChange={(open) => { if (!open && !quotaBusy) setQuotaTarget(null); }}>
+          <AlertDialogContent className="admin-delete-dialog admin-quota-dialog"><AlertDialogHeader><AlertDialogMedia><RotateCcw /></AlertDialogMedia><AlertDialogTitle>{quotaTarget === 'all' ? 'Reset every teacher quota?' : `Reset ${quotaTarget && typeof quotaTarget !== 'string' ? quotaTarget.displayName : 'teacher'}’s quota?`}</AlertDialogTitle><AlertDialogDescription>This immediately restores all weekly question and image generation credits. The normal weekly reset schedule will stay the same.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={quotaBusy}>Cancel</AlertDialogCancel><AlertDialogAction className="admin-confirm-reset" disabled={quotaBusy} onClick={() => void resetAiQuota()}>{quotaBusy ? <LoaderCircle className="spin" /> : <RotateCcw />} Reset quota</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+        </AlertDialog>
         </>}
       </section>
     </main>
@@ -566,6 +609,11 @@ function RolePreview({ role, classrooms, users }: { role: 'teacher' | 'student';
   const students = users.filter((item) => item.role === 'student').length;
   const sample = classrooms.slice(0, 3);
   return <section className={`admin-role-preview ${role}`}><div className="admin-preview-banner"><div><p className="admin-eyebrow">Read-only POV preview</p><h2>{role === 'teacher' ? 'Ready to teach?' : 'Ready to learn?'}</h2><p>{role === 'teacher' ? 'This is how classroom activity and learner progress are presented to teachers.' : 'This is how enrolled classes and learning progress are presented to students.'}</p></div><span>{role === 'teacher' ? <GraduationCap /> : <BookOpen />}</span></div><div className="admin-preview-stats"><article><small>{role === 'teacher' ? 'YOUR CLASSROOMS' : 'MY CLASSROOMS'}</small><strong>{sample.length}</strong></article><article><small>{role === 'teacher' ? 'TOTAL LEARNERS' : 'OVERALL PROGRESS'}</small><strong>{role === 'teacher' ? students : `${sample.length ? Math.round(sample.reduce((sum, item) => sum + (item.progress || 0), 0) / sample.length) : 0}%`}</strong></article><article><small>{role === 'teacher' ? 'TEACHERS ONLINE' : 'TEACHERS'}</small><strong>{teachers}</strong></article></div><div className="admin-panel"><div className="admin-panel-head"><div><p className="admin-eyebrow">Role experience</p><h3>{role === 'teacher' ? 'Classroom overview' : 'My learning spaces'}</h3></div></div>{sample.length ? <div className="admin-class-grid">{sample.map((item, index) => <article className={`admin-class-card tone-${index % 4}`} key={item.id}><div className="admin-class-top"><span><BookOpen /></span><em>{item.code || 'CLASS'}</em></div><small>{item.subject || 'General learning'}</small><h3>{item.name || 'Classroom'}</h3><p>{role === 'teacher' ? `${item.students || 0} learners enrolled` : `Teacher · ${item.teacherName || 'Teacher'}`}</p><div className="admin-class-metrics"><span><Users /> {item.students || 0}</span><b>{item.progress || 0}% progress</b></div><div className="admin-progress"><i style={{ width: `${item.progress || 0}%` }} /></div></article>)}</div> : <EmptyState icon={BookOpen} title="No classrooms to preview" text="Classrooms will appear here once created." />}</div></section>;
+}
+
+function QuotaMeter({ label, used, limit, image = false }: { label: string; used: number; limit: number; image?: boolean }) {
+  const percent = Math.min(100, limit ? used / limit * 100 : 0);
+  return <div className="admin-quota-meter"><div><span>{label}</span><b>{used}/{limit} used</b></div><div className={`admin-progress${image ? ' image' : ''}`}><i style={{ width: `${percent}%` }} /></div></div>;
 }
 
 function EmptyState({ icon: Icon, title, text }: { icon: typeof BookOpen; title: string; text: string }) {

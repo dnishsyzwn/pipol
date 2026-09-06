@@ -24,7 +24,7 @@ import {
   removeUndefinedValues,
   validateQuestionSet,
 } from './schemas.js';
-import { refundReservation, reserveQuota, settleQuota, type QuotaReservation } from './quota.js';
+import { refundReservation, reserveQuota, resetQuota, settleQuota, type QuotaReservation } from './quota.js';
 import type { QuizQuestion } from './types.js';
 
 setGlobalOptions({ region: 'asia-southeast1', maxInstances: 10, enforceAppCheck: true });
@@ -81,6 +81,39 @@ export const adminDeleteClassroom = onCall(async (request) => {
   await writer.close();
   await db.recursiveDelete(classroomRef);
   return { ok: true };
+});
+
+export const adminListAiQuotas = onCall(async (request) => {
+  await requireAdmin(request);
+  const [users, usage] = await Promise.all([
+    db.collection('users').where('role', '==', 'teacher').get(),
+    db.collection('usage').get(),
+  ]);
+  const usageById = new Map(usage.docs.map((item) => [item.id, item.data()]));
+  return {
+    questionLimit: config.questionQuota,
+    imageLimit: config.imageQuota,
+    teachers: users.docs.map((item) => {
+      const profile = item.data();
+      const quota = usageById.get(item.id);
+      return { id: item.id, displayName: String(profile.displayName || 'Teacher'), email: String(profile.email || ''), photoURL: String(profile.photoURL || ''), questionsUsed: Number(quota?.questionsUsed || 0), imagesUsed: Number(quota?.imagesUsed || 0), nextResetAt: quota?.nextResetAt || null };
+    }),
+  };
+});
+
+export const adminResetAiQuota = onCall(async (request) => {
+  const admin = await requireAdmin(request);
+  const input = request.data as { userId?: unknown; resetAll?: unknown };
+  if (input.resetAll === true) {
+    const teachers = await db.collection('users').where('role', '==', 'teacher').get();
+    await Promise.all(teachers.docs.map((teacher) => resetQuota(teacher.id, admin.uid)));
+    return { ok: true, resetCount: teachers.size };
+  }
+  const userId = assertSafeId(String(input.userId ?? ''), 'User');
+  const teacher = await db.collection('users').doc(userId).get();
+  if (!teacher.exists || teacher.get('role') !== 'teacher') failed('Teacher not found.');
+  await resetQuota(userId, admin.uid);
+  return { ok: true, resetCount: 1 };
 });
 
 export const testAiConnection = onCall({ secrets: providerSecrets }, async (request) => {

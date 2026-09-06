@@ -6,6 +6,7 @@ import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import mammoth from 'mammoth';
 import { config } from './config.js';
 import { invalid } from './errors.js';
+import { extractScannedPdf } from './pdf-ocr.js';
 
 export const supportedExtensions = new Set(['pdf', 'pptx', 'odp', 'docx', 'odt', 'md', 'markdown', 'txt', 'rtf']);
 
@@ -73,13 +74,25 @@ export async function extractMaterial(buffer: Buffer, fileName: string): Promise
   let result: ExtractedMaterial;
   if (extension === 'pdf') {
     const parsed = await pdfParse(buffer);
+    let extractedText = parsed.text.trim();
+    let ocrUsed = false;
+    const pageCount = Number((parsed as unknown as { numpages?: number }).numpages || 1);
+    const likelyImageOnly = extractedText.length < Math.max(80, pageCount * 40);
+    if (likelyImageOnly) {
+      try {
+        extractedText = (await extractScannedPdf(buffer)).trim();
+        ocrUsed = extractedText.length > 0;
+      } catch (error) {
+        console.warn('Scanned PDF OCR fallback failed:', error instanceof Error ? error.message : 'unknown error');
+      }
+    }
     result = {
-      text: parsed.text.trim(),
-      sections: parsed.text
+      text: extractedText,
+      sections: extractedText
         .split(/\f+/)
         .map((content, index) => ({ content: content.trim(), page: index + 1 }))
         .filter((section) => section.content.length > 0),
-      warnings: parsed.text.trim().length < 80 ? ['This PDF may be scanned or image-only; some content may be missing.'] : [],
+      warnings: ocrUsed ? ['Text was extracted from scanned PDF pages using Vertex AI document OCR. Review the extracted text before generating questions.'] : likelyImageOnly ? ['This PDF may be scanned or image-only; some content may be missing.'] : [],
     };
   } else if (extension === 'docx') {
     const parsed = await mammoth.extractRawText({ buffer });

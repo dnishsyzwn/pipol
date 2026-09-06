@@ -93,3 +93,12 @@ export async function refundReservation(reservation: QuotaReservation): Promise<
     transaction.set(reservation.summaryRef, summary(reservation.summaryRef.id, cycle, questionsUsed, imagesUsed));
   });
 }
+
+export async function resetQuota(uid: string, resetBy: string): Promise<void> {
+  const cycle = await accountCycle(uid);
+  await db.collection('usage').doc(uid).set({
+    ...summary(uid, cycle, 0, 0),
+    resetBy,
+    manuallyResetAt: FieldValue.serverTimestamp(),
+  });
+}
