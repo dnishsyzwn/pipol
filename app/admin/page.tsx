@@ -23,6 +23,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Trash2,
   Users,
   X,
 } from 'lucide-react';
@@ -34,11 +35,13 @@ import {
   signOut,
   type User,
 } from 'firebase/auth';
-import { collection, doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc, type Timestamp } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc, type Timestamp } from 'firebase/firestore';
 import { auth, db, googleProvider } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogMedia, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { Switch } from '@/components/ui/switch';
 import { SCHOOL_STAGES, SCHOOL_YEARS, type SchoolStage } from '@/lib/malaysia-curriculum';
 import './admin.css';
 
@@ -260,6 +263,9 @@ export default function AdminPage() {
   const [subjectYear, setSubjectYear] = useState(SCHOOL_YEARS.primary[0]);
   const [savingSubject, setSavingSubject] = useState(false);
   const [subjectError, setSubjectError] = useState('');
+  const [adminMode, setAdminMode] = useState(true);
+  const [subjectToDelete, setSubjectToDelete] = useState<CatalogSubject | null>(null);
+  const [deletingSubject, setDeletingSubject] = useState(false);
   const [search, setSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [dataError, setDataError] = useState('');
@@ -298,6 +304,7 @@ export default function AdminPage() {
   }, [status]);
 
   const openSubjectEditor = (subject?: CatalogSubject) => {
+    if (!adminMode) return;
     setEditingSubject(subject || null);
     setSubjectName(subject?.label || '');
     setSubjectStage(subject?.schoolStage || 'primary');
@@ -306,9 +313,23 @@ export default function AdminPage() {
     setSubjectEditorOpen(true);
   };
 
+  const removeSubject = async () => {
+    if (!adminMode || !subjectToDelete) return;
+    setDeletingSubject(true);
+    setDataError('');
+    try {
+      await deleteDoc(doc(db, 'subjectCatalog', subjectToDelete.id));
+      setSubjectToDelete(null);
+    } catch {
+      setDataError('The subject could not be deleted. Please try again.');
+    } finally {
+      setDeletingSubject(false);
+    }
+  };
+
   const saveSubject = async (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!user || !subjectName.trim()) return;
+    if (!user || !adminMode || !subjectName.trim()) return;
     setSavingSubject(true);
     setSubjectError('');
     try {
@@ -332,7 +353,7 @@ export default function AdminPage() {
   };
 
   const reviewSubject = async (proposal: SubjectProposal, approved: boolean) => {
-    if (!user) return;
+    if (!user || !adminMode) return;
     setReviewingSubject(proposal.id);
     setDataError('');
     try {
@@ -401,7 +422,7 @@ export default function AdminPage() {
       </aside>
       {menuOpen && <button className="admin-scrim" onClick={() => setMenuOpen(false)} aria-label="Close menu" />}
       <section className="admin-content">
-        <header className="admin-topbar"><div><button className="admin-menu" onClick={() => setMenuOpen(true)} aria-label="Open menu"><Menu /></button><div><p className="admin-eyebrow">SLearn administration</p><h1>{currentTitle}</h1></div></div><div className="admin-live"><i /> Live data</div></header>
+        <header className="admin-topbar"><div><button className="admin-menu" onClick={() => setMenuOpen(true)} aria-label="Open menu"><Menu /></button><div><p className="admin-eyebrow">SLearn administration</p><h1>{currentTitle}</h1></div></div><div className="admin-top-actions"><div className={adminMode ? 'admin-mode active' : 'admin-mode'}><span><b>Admin mode</b><small>{adminMode ? 'Editing enabled' : 'View only'}</small></span><Switch checked={adminMode} onCheckedChange={(checked) => { setAdminMode(checked); if (!checked) { setSubjectEditorOpen(false); setSubjectToDelete(null); } }} aria-label="Toggle admin mode" /></div><div className="admin-live"><i /> Live data</div></div></header>
         {dataError && <p className="admin-data-error"><CircleAlert /> {dataError}</p>}
 
         {tab === 'overview' && <>
@@ -424,12 +445,12 @@ export default function AdminPage() {
 
         {tab === 'subjects' && <section className="admin-subject-space">
           <section className="admin-panel admin-subject-catalog">
-            <div className="admin-directory-head"><div><p className="admin-eyebrow">{subjectCatalog.length} custom subjects</p><h2>Subject management</h2></div><button className="admin-primary admin-add-subject" onClick={() => openSubjectEditor()}><Plus /> Add subject</button></div>
-            {subjectCatalog.length ? <div className="admin-subject-grid">{subjectCatalog.slice().sort((a, b) => a.label.localeCompare(b.label)).map((item) => <article className="admin-subject-card" key={item.id}><span><BookOpen /></span><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Available to teachers creating or editing classrooms.</p></div><button onClick={() => openSubjectEditor(item)} aria-label={`Edit ${item.label}`}><Pencil /> Edit</button></article>)}</div> : <EmptyState icon={BookOpen} title="No custom subjects yet" text="Add a subject to make it available to teachers." />}
+            <div className="admin-directory-head"><div><p className="admin-eyebrow">{subjectCatalog.length} custom subjects</p><h2>Subject management</h2></div><button className="admin-primary admin-add-subject" disabled={!adminMode} onClick={() => openSubjectEditor()}><Plus /> Add subject</button></div>
+            {subjectCatalog.length ? <div className="admin-subject-grid">{subjectCatalog.slice().sort((a, b) => a.label.localeCompare(b.label)).map((item) => <article className="admin-subject-card" key={item.id}><span><BookOpen /></span><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Available to teachers creating or editing classrooms.</p></div><div className="admin-subject-actions"><button disabled={!adminMode} onClick={() => openSubjectEditor(item)} aria-label={`Edit ${item.label}`}><Pencil /> Edit</button><button className="admin-delete-subject" disabled={!adminMode} onClick={() => setSubjectToDelete(item)} aria-label={`Delete ${item.label}`}><Trash2 /> Delete</button></div></article>)}</div> : <EmptyState icon={BookOpen} title="No custom subjects yet" text="Add a subject to make it available to teachers." />}
           </section>
           <section className="admin-panel admin-subject-requests">
             <div className="admin-panel-head"><div><p className="admin-eyebrow">{subjectProposals.filter((item) => item.status === 'pending').length} pending</p><h3>Teacher requests</h3></div></div>
-            <div className="subject-request-list">{subjectProposals.filter((item) => item.status === 'pending').length ? subjectProposals.filter((item) => item.status === 'pending').map((item) => <article className="subject-request-card" key={item.id}><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Requested by {item.requesterName || item.requesterEmail || 'Teacher'} · {dateLabel(item.createdAt)}</p></div><div><button className="subject-reject" disabled={reviewingSubject === item.id} onClick={() => reviewSubject(item, false)}><X /> Reject</button><button className="admin-primary" disabled={reviewingSubject === item.id} onClick={() => reviewSubject(item, true)}>{reviewingSubject === item.id ? <LoaderCircle className="spin" /> : <Check />} Approve</button></div></article>) : <EmptyState icon={Check} title="No pending requests" text="New teacher-submitted subjects will appear here." />}</div>
+            <div className="subject-request-list">{subjectProposals.filter((item) => item.status === 'pending').length ? subjectProposals.filter((item) => item.status === 'pending').map((item) => <article className="subject-request-card" key={item.id}><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Requested by {item.requesterName || item.requesterEmail || 'Teacher'} · {dateLabel(item.createdAt)}</p></div><div><button className="subject-reject" disabled={!adminMode || reviewingSubject === item.id} onClick={() => reviewSubject(item, false)}><X /> Reject</button><button className="admin-primary" disabled={!adminMode || reviewingSubject === item.id} onClick={() => reviewSubject(item, true)}>{reviewingSubject === item.id ? <LoaderCircle className="spin" /> : <Check />} Approve</button></div></article>) : <EmptyState icon={Check} title="No pending requests" text="New teacher-submitted subjects will appear here." />}</div>
           </section>
         </section>}
 
@@ -454,6 +475,12 @@ export default function AdminPage() {
             </form>
           </DialogContent>
         </Dialog>
+        <AlertDialog open={Boolean(subjectToDelete)} onOpenChange={(open) => { if (!open && !deletingSubject) setSubjectToDelete(null); }}>
+          <AlertDialogContent className="admin-delete-dialog">
+            <AlertDialogHeader><AlertDialogMedia><Trash2 /></AlertDialogMedia><AlertDialogTitle>Delete {subjectToDelete?.label}?</AlertDialogTitle><AlertDialogDescription>This removes the subject from the shared classroom list. Existing classrooms using it will keep their current subject name.</AlertDialogDescription></AlertDialogHeader>
+            <AlertDialogFooter><AlertDialogCancel disabled={deletingSubject}>Cancel</AlertDialogCancel><AlertDialogAction className="admin-confirm-delete" disabled={deletingSubject} onClick={() => void removeSubject()}>{deletingSubject ? <LoaderCircle className="spin" /> : <Trash2 />} Delete subject</AlertDialogAction></AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </section>
     </main>
   );
