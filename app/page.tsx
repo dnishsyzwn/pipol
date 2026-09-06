@@ -57,6 +57,7 @@ import {
   Unlock,
   Users,
   WandSparkles,
+  WifiOff,
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -299,6 +300,27 @@ function useAiQuota(user: User, enabled = true): AiQuota {
     return () => { unsubscribe(); window.clearInterval(timer); };
   }, [enabled, user.metadata.creationTime, user.uid]);
   return quota;
+}
+
+function useOnlineStatus(): boolean {
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== 'undefined' ? navigator.onLine : true,
+  );
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  return isOnline;
 }
 
 function quotaCountdown(date: Date | null) {
@@ -814,6 +836,7 @@ function AppShell({
   active?: View;
   classCount?: number;
 }) {
+  const isOnline = useOnlineStatus();
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileName, setProfileName] = useState(user.displayName || '');
   const [profilePhoto, setProfilePhoto] = useState(user.photoURL || '');
@@ -866,7 +889,14 @@ function AppShell({
             {avatar()}
             <div>
               <b>{profileName || 'SLearn user'}</b>
-              <small>{role}</small>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <small>{role}</small>
+                {!isOnline && (
+                  <span className="offline-badge" title="No internet connection">
+                    <WifiOff style={{ width: 10, height: 10 }} /> Offline
+                  </span>
+                )}
+              </div>
             </div>
           </button>
           <button onClick={onExit} aria-label="Sign out" title="Sign out">
@@ -876,14 +906,37 @@ function AppShell({
       </aside>
       <div className="mobile-bar">
         <Brand />
-        <button type="button" className="mobile-profile" onClick={openProfile} aria-label="Edit profile">{avatar()}</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {!isOnline && (
+            <span className="offline-badge" title="No internet connection">
+              <WifiOff style={{ width: 10, height: 10 }} /> Offline
+            </span>
+          )}
+          <button type="button" className="mobile-profile" onClick={openProfile} aria-label="Edit profile">{avatar()}</button>
+        </div>
       </div>
-      <section className="main-stage">{children}</section>
+      <section className="main-stage">
+        {!isOnline && (
+          <div className="offline-banner" role="status">
+            <div className="offline-banner-icon">
+              <WifiOff style={{ width: 18, height: 18 }} />
+            </div>
+            <div className="offline-banner-content">
+              <strong>Offline Mode Active</strong>
+              <span>
+                You are currently disconnected. You can continue reviewing cached classrooms, viewing exercises, and drafting answers. Any changes will automatically sync once your connection is restored.
+              </span>
+            </div>
+          </div>
+        )}
+        {children}
+      </section>
       <Dialog open={profileOpen} onOpenChange={setProfileOpen}><DialogContent className="modal-card profile-modal"><DialogHeader><DialogTitle>Profile dashboard</DialogTitle><DialogDescription>Manage your profile and view your SLearn AI allowance.</DialogDescription></DialogHeader><div className="profile-editor"><div className="profile-photo-preview">{profilePreview ? <img src={profilePreview} alt="Profile preview" /> : <span>{initials(profileName)}</span>}<label title="Choose profile picture"><Camera/><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0])}/></label></div><label className="form-label">Display name<Input value={profileName} maxLength={60} onChange={(event) => setProfileName(event.target.value)} placeholder="Your name"/></label><p className="profile-help">JPG, PNG or WebP · maximum 5 MB</p>{role === 'teacher' && <div style={{ background: '#f8faf7', border: '1px solid #dfe8df', borderRadius: 16, padding: '1rem', width: '100%' }}><span className="kicker">Personal weekly AI quota</span><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.7rem', marginTop: '.6rem' }}><div><b>{Math.max(0, 15 - profileQuota.questionsUsed)}/15</b><small style={{ display: 'block' }}>questions available</small></div><div><b>{Math.max(0, 5 - profileQuota.imagesUsed)}/5</b><small style={{ display: 'block' }}>images available</small></div></div><div style={{ marginTop: '.8rem', paddingTop: '.8rem', borderTop: '1px solid #dfe8df' }}><b>Full quota resets in {quotaCountdown(profileQuota.nextResetAt)}</b><small style={{ display: 'block', marginTop: '.2rem' }}>{profileQuota.nextResetAt ? profileQuota.nextResetAt.toLocaleString() : 'The reset schedule is based on when this account was created.'}</small><small style={{ display: 'block', marginTop: '.25rem' }}>Unused credits do not carry over to the next cycle.</small></div></div>}{profileError && <p className="auth-error">{profileError}</p>}</div><DialogFooter><Button variant="outline" onClick={() => setProfileOpen(false)} disabled={profileSaving}>Close</Button><Button className="primary-action" onClick={saveProfile} disabled={profileSaving}>{profileSaving ? <><LoaderCircle/> Saving…</> : <><Check/> Save profile</>}</Button></DialogFooter></DialogContent></Dialog>
     </div>
   );
 }
 function Topbar({ role, user }: { role: Role; user: User }) {
+  const isOnline = useOnlineStatus();
   const first = (
     user.displayName || (role === 'teacher' ? 'Teacher' : 'Learner')
   ).split(' ')[0];
@@ -898,6 +951,11 @@ function Topbar({ role, user }: { role: Role; user: User }) {
         </h1>
       </div>
       <div className="top-actions">
+        {!isOnline && (
+          <span className="offline-badge" title="No internet connection">
+            <WifiOff style={{ width: 12, height: 12 }} /> Offline
+          </span>
+        )}
         <label>
           <Search />
           <input placeholder="Search" />

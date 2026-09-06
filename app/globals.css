@@ -3628,3 +3628,54 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* Offline Mode Feedback */
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  border-radius: 1rem;
+  padding: 0.85rem 1.15rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  box-shadow: 0 2px 8px rgba(185, 28, 28, 0.05);
+}
+.offline-banner-icon {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.65rem;
+  background: #fee2e2;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: #dc2626;
+}
+.offline-banner-content {
+  flex: 1;
+}
+.offline-banner-content strong {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 0.15rem;
+}
+.offline-banner-content span {
+  color: #7f1d1d;
+  font-size: 0.82rem;
+}
+.offline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+  padding: 0.2rem 0.65rem;
+  border-radius: 99px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
