@@ -2029,6 +2029,7 @@ function Classroom({
   classroom,
   onBack,
   onQuiz,
+  onEditExercise,
   onStartExercise,
   onExit,
   onClassUpdated,
@@ -2039,6 +2040,7 @@ function Classroom({
   classroom: ClassroomData;
   onBack: () => void;
   onQuiz: () => void;
+  onEditExercise?: (ex: any) => void;
   onStartExercise: (ex: any) => void;
   onExit: () => void;
   onClassUpdated?: (c: ClassroomData) => void;
@@ -2586,7 +2588,8 @@ function Classroom({
                               title="Edit exercise"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                openEditExercise(ex);
+                                if (onEditExercise) onEditExercise(ex);
+                                else openEditExercise(ex);
                               }}
                               aria-label={`Edit ${ex.title}`}
                               style={{ width: 26, height: 26 }}
@@ -3766,6 +3769,20 @@ function Classroom({
           )}
           {editExError && <p className="form-error">{editExError}</p>}
           <DialogFooter style={{ marginTop: 14 }}>
+            {onEditExercise && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  const target = editExTarget;
+                  setEditExTarget(null);
+                  onEditExercise(target);
+                }}
+                style={{ gap: '0.35rem', marginRight: 'auto' }}
+              >
+                <Pencil style={{ width: 14, height: 14 }} /> Edit in Builder
+              </Button>
+            )}
             <Button variant="outline" onClick={() => setEditExTarget(null)}>
               Cancel
             </Button>
@@ -5252,35 +5269,68 @@ function StudentExerciseRunner({
 function QuizBuilder({
   user,
   classroom,
+  initialExercise,
   onBack,
   onExit,
 }: {
   user: User;
   classroom: ClassroomData;
+  initialExercise?: any | null;
   onBack: () => void;
   onExit: () => void;
 }) {
-  const [title, setTitle] = useState('');
+  const isEditing = Boolean(initialExercise);
+  const [title, setTitle] = useState(initialExercise?.title || '');
   const [titleError, setTitleError] = useState('');
-  const [deadline, setDeadline] = useState('');
-  const [allowLateSubmissions, setAllowLateSubmissions] = useState(true);
-  const [questions, setQuestions] = useState<QuestionItem[]>([
-    {
-      id: '1',
-      question: 'Solve for x: 3x + 5 = 20.',
-      answer: 'x = 5',
-      points: 2,
-      enhanced: false,
-    },
-  ]);
+  const [deadline, setDeadline] = useState(initialExercise?.deadline || '');
+  const [allowLateSubmissions, setAllowLateSubmissions] = useState(
+    initialExercise ? initialExercise.allowLateSubmissions !== false : true,
+  );
+  const [questions, setQuestions] = useState<QuestionItem[]>(() => {
+    if (initialExercise?.questions?.length) {
+      return initialExercise.questions.map((q: any, idx: number) => ({
+        id: q.id || String(idx + 1),
+        question: q.question || '',
+        answer: q.answer || '',
+        points: Number(q.points) || 2,
+        enhanced: Boolean(q.enhanced),
+        difficulty: q.difficulty || 'medium',
+      }));
+    }
+    if (initialExercise?.question) {
+      return [
+        {
+          id: '1',
+          question: initialExercise.question,
+          answer: initialExercise.answer || '',
+          points: 2,
+          enhanced: Boolean(initialExercise.enhanced),
+          difficulty: 'medium',
+        },
+      ];
+    }
+    return [
+      {
+        id: '1',
+        question: 'Solve for x: 3x + 5 = 20.',
+        answer: 'x = 5',
+        points: 2,
+        enhanced: false,
+      },
+    ];
+  });
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
   const [aiMessage, setAiMessage] = useState('');
   const [aiPrompt, setAiPrompt] = useState('');
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
-  const [questionCount, setQuestionCount] = useState(5);
+  const [questionCount, setQuestionCount] = useState(
+    initialExercise?.questions?.length || 5,
+  );
   const [imageCount, setImageCount] = useState(0);
-  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | 'mixed'>('medium');
+  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | 'mixed'>(
+    initialExercise?.questions?.[0]?.difficulty || 'medium',
+  );
   const [generating, setGenerating] = useState(false);
   const quota = useAiQuota(user);
   const [quickGenerateIndex, setQuickGenerateIndex] = useState<number | null>(null);
@@ -5460,28 +5510,49 @@ function QuizBuilder({
 
   const publish = async () => {
     if (!title.trim()) {
-      setTitleError('Please enter an exercise name before publishing.');
+      setTitleError('Please enter an exercise name before saving.');
       return;
     }
     if (!questions.some((q) => q.question.trim())) return;
     setPublishing(true);
     try {
-      await addDoc(collection(db, 'classrooms', classroom.id, 'exercises'), {
-        title: title.trim(),
-        deadline: deadline.trim() || null,
-        allowLateSubmissions: deadline.trim() ? allowLateSubmissions : true,
-        questions: questions.map((q) => ({
-          question: q.question.trim(),
-          answer: q.answer.trim(),
-          points: q.points,
-          enhanced: q.enhanced,
-          difficulty: q.difficulty || 'medium',
-        })),
-        questionCount: questions.length,
-        enhanced: hasEnhancedAny,
-        teacherId: user.uid,
-        createdAt: serverTimestamp(),
-      });
+      if (isEditing && initialExercise?.id) {
+        await updateDoc(
+          doc(db, 'classrooms', classroom.id, 'exercises', initialExercise.id),
+          {
+            title: title.trim(),
+            deadline: deadline.trim() || null,
+            allowLateSubmissions: deadline.trim() ? allowLateSubmissions : true,
+            questions: questions.map((q) => ({
+              question: q.question.trim(),
+              answer: q.answer.trim(),
+              points: q.points,
+              enhanced: q.enhanced,
+              difficulty: q.difficulty || 'medium',
+            })),
+            questionCount: questions.length,
+            enhanced: hasEnhancedAny,
+            updatedAt: serverTimestamp(),
+          },
+        );
+      } else {
+        await addDoc(collection(db, 'classrooms', classroom.id, 'exercises'), {
+          title: title.trim(),
+          deadline: deadline.trim() || null,
+          allowLateSubmissions: deadline.trim() ? allowLateSubmissions : true,
+          questions: questions.map((q) => ({
+            question: q.question.trim(),
+            answer: q.answer.trim(),
+            points: q.points,
+            enhanced: q.enhanced,
+            difficulty: q.difficulty || 'medium',
+          })),
+          questionCount: questions.length,
+          enhanced: hasEnhancedAny,
+          teacherId: user.uid,
+          createdAt: serverTimestamp(),
+        });
+      }
       setPublished(true);
       setTimeout(() => onBack(), 800);
     } catch (e) {
@@ -5504,7 +5575,11 @@ function QuizBuilder({
           <ArrowLeft /> {classroom.name}
         </button>
         <div>
-          <span className="draft-dot" /> {published ? 'Published' : 'Draft'} ·{' '}
+          <span
+            className="draft-dot"
+            style={isEditing ? { background: '#15803d' } : undefined}
+          />{' '}
+          {isEditing ? 'Editing' : published ? 'Published' : 'Draft'} ·{' '}
           {title.trim() ? <b>{title.trim()}</b> : <em>Untitled Exercise</em>} (
           {questions.length} Question{questions.length > 1 ? 's' : ''})
         </div>
@@ -5513,8 +5588,22 @@ function QuizBuilder({
           disabled={published || publishing || !isValid}
           className="primary-action"
         >
-          {publishing ? <LoaderCircle /> : published ? <Check /> : <Send />}{' '}
-          {published ? 'Published' : `Publish (${questions.length})`}
+          {publishing ? (
+            <LoaderCircle />
+          ) : published ? (
+            <Check />
+          ) : isEditing ? (
+            <Check />
+          ) : (
+            <Send />
+          )}{' '}
+          {published
+            ? isEditing
+              ? 'Saved'
+              : 'Published'
+            : isEditing
+              ? `Save changes (${questions.length})`
+              : `Publish (${questions.length})`}
         </Button>
       </div>
       <div
@@ -6110,7 +6199,14 @@ export default function Home() {
         user={user}
         classroom={selectedClass}
         onBack={() => setView('classes')}
-        onQuiz={() => setView('quiz')}
+        onQuiz={() => {
+          setSelectedExercise(null);
+          setView('quiz');
+        }}
+        onEditExercise={(ex) => {
+          setSelectedExercise(ex);
+          setView('quiz');
+        }}
         onStartExercise={(ex) => {
           setSelectedExercise(ex);
           setView('exercise');
@@ -6128,7 +6224,11 @@ export default function Home() {
       <QuizBuilder
         user={user}
         classroom={selectedClass}
-        onBack={() => setView('classroom')}
+        initialExercise={selectedExercise}
+        onBack={() => {
+          setSelectedExercise(null);
+          setView('classroom');
+        }}
         onExit={logout}
       />
     );
