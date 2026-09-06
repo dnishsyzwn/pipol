@@ -6260,6 +6260,11 @@ function StudentExerciseRunnerContent({
 
       setSubmitted(true);
       setAlreadyCompleted(true);
+      window.setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent<NavTarget>('slearn:navigate', { detail: 'overview' }),
+        );
+      }, 650);
     } catch (e: any) {
       console.error('Error submitting exercise:', e);
       setSubmitError(
