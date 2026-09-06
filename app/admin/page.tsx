@@ -247,7 +247,7 @@ function AccessDenied({ user }: { user: User }) {
         <h1>Admin access required</h1>
         <p><strong>{user.email}</strong> is signed in, but this account has not been assigned the admin role.</p>
         <div className="admin-denied-note">For safety, admin access cannot be created from this page. Ask the project owner to assign it in the user record.</div>
-        <button className="admin-primary" onClick={() => signOut(auth)}><LogOut /> Sign out</button>
+        <button className="admin-primary" onClick={async () => { await signOut(auth); window.location.replace('/'); }}><LogOut /> Sign out</button>
         <Link className="admin-back" href="/">Return to SLearn</Link>
       </section>
     </main>
@@ -288,6 +288,11 @@ export default function AdminPage() {
   const [quotaBusy, setQuotaBusy] = useState(false);
 
   useEffect(() => { void initializeSlearnAppCheck(); }, []);
+
+  const logoutAdmin = async () => {
+    await signOut(auth);
+    window.location.replace('/');
+  };
 
   useEffect(() => onAuthStateChanged(auth, async (nextUser) => {
     setUser(nextUser);
@@ -518,7 +523,7 @@ export default function AdminPage() {
         <div className="admin-sidebar-head"><Link className="admin-brand" href="/"><span>S</span><b>SLearn</b></Link><button onClick={() => setMenuOpen(false)} className="admin-close" aria-label="Close menu"><X /></button></div>
         <div className="admin-badge"><ShieldCheck /><div><b>Admin portal</b><small>Platform control centre</small></div></div>
         <nav>{nav.map(({ id, label, icon: Icon }) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => selectTab(id)}><Icon /> {label}<ChevronRight /></button>)}</nav>
-        <div className="admin-account"><Avatar photo={user?.photoURL} name={user?.displayName || user?.email || 'A'} /><div><b>{user?.displayName || 'Administrator'}</b><small>{user?.email}</small></div><button onClick={() => signOut(auth)} aria-label="Sign out"><LogOut /></button></div>
+        <div className="admin-account"><Avatar photo={user?.photoURL} name={user?.displayName || user?.email || 'A'} /><div><b>{user?.displayName || 'Administrator'}</b><small>{user?.email}</small></div><button onClick={() => void logoutAdmin()} aria-label="Sign out"><LogOut /></button></div>
       </aside>
       {menuOpen && <button className="admin-scrim" onClick={() => setMenuOpen(false)} aria-label="Close menu" />}
       <section className="admin-content">

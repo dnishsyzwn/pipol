@@ -7955,7 +7955,7 @@ function QuizBuilder({
         points: q.points,
         enhanced: q.enhanced,
         type: q.type || 'short_answer',
-        choices: q.type === 'multiple_choice' ? (q.choices || []).map(cleanTag).filter(Boolean) : undefined,
+        ...(q.type === 'multiple_choice' ? { choices: (q.choices || []).map(cleanTag).filter(Boolean) } : {}),
         markingMode: q.type === 'multiple_choice' ? 'automatic' : (q.markingMode || 'automatic'),
         difficulty: q.difficulty || 'medium',
         topic: cleanTag(q.topic) || 'General',
@@ -8034,6 +8034,7 @@ function QuizBuilder({
       setTimeout(() => onBack(), 800);
     } catch (e) {
       console.error(e);
+      toast.add({ title: 'Could not publish exercise', description: friendlyError(e), type: 'error', timeout: 8000 });
     } finally {
       setPublishing(false);
     }
@@ -8749,7 +8750,8 @@ export default function Home() {
     [selectedExercise, setSelectedExercise] = useState<any | null>(null),
     [detailCount, setDetailCount] = useState(0),
     [, setProfileVersion] = useState(0),
-    [resetPasswordCode, setResetPasswordCode] = useState<string | null>(null);
+    [resetPasswordCode, setResetPasswordCode] = useState<string | null>(null),
+    [navigationReady, setNavigationReady] = useState(false);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -8779,6 +8781,7 @@ export default function Home() {
   useEffect(
     () =>
       onAuthStateChanged(auth, async (current) => {
+        setNavigationReady(false);
         setUser(current);
         if (current) {
           const profile = await getDoc(doc(db, 'users', current.uid));
@@ -8793,6 +8796,52 @@ export default function Home() {
       }),
     [],
   );
+  useEffect(() => {
+    if (!user || !role) return;
+    const restoreNavigation = async () => {
+      try {
+        const saved = window.localStorage.getItem(`slearn:navigation:${user.uid}`);
+        if (!saved) return;
+        const state = JSON.parse(saved) as { view?: View; classId?: string; exerciseId?: string };
+        const simpleViews: View[] = ['dashboard', 'classes', 'progress', 'analytics'];
+        if (state.view && simpleViews.includes(state.view)) {
+          setView(state.view);
+          return;
+        }
+        if (!state.classId) return;
+        const classroomSnapshot = await getDoc(doc(db, 'classrooms', state.classId));
+        if (!classroomSnapshot.exists()) return;
+        const restoredClassroom = { id: classroomSnapshot.id, ...classroomSnapshot.data() } as ClassroomData;
+        setSelectedClass(restoredClassroom);
+        if (state.view === 'quiz' && role === 'teacher') {
+          if (state.exerciseId) {
+            const exerciseSnapshot = await getDoc(doc(db, 'classrooms', state.classId, 'exercises', state.exerciseId));
+            if (exerciseSnapshot.exists()) setSelectedExercise({ id: exerciseSnapshot.id, ...exerciseSnapshot.data() });
+          }
+          setView('quiz');
+          return;
+        }
+        if (state.view === 'exercise' && state.exerciseId) {
+          const exerciseSnapshot = await getDoc(doc(db, 'classrooms', state.classId, 'exercises', state.exerciseId));
+          if (exerciseSnapshot.exists()) {
+            setSelectedExercise({ id: exerciseSnapshot.id, ...exerciseSnapshot.data() });
+            setView('exercise');
+            return;
+          }
+        }
+        setView('classroom');
+      } catch {
+        window.localStorage.removeItem(`slearn:navigation:${user.uid}`);
+      } finally {
+        setNavigationReady(true);
+      }
+    };
+    void restoreNavigation();
+  }, [user, role]);
+  useEffect(() => {
+    if (!user || !role || !navigationReady) return;
+    window.localStorage.setItem(`slearn:navigation:${user.uid}`, JSON.stringify({ view, classId: selectedClass?.id, exerciseId: selectedExercise?.id }));
+  }, [user, role, navigationReady, view, selectedClass?.id, selectedExercise?.id]);
   useEffect(() => {
     const navigate = (event: Event) => { const target = (event as CustomEvent<NavTarget>).detail; setView(target === 'overview' ? 'dashboard' : target); setSelectedClass(null); setSelectedExercise(null); window.scrollTo({ top: 0, behavior: 'smooth' }); };
     const refreshProfile = () => setProfileVersion((version) => version + 1);
@@ -8912,6 +8961,7 @@ export default function Home() {
     }
   };
   const logout = async () => {
+    if (user) window.localStorage.removeItem(`slearn:navigation:${user.uid}`);
     await signOut(auth);
     setUser(null);
     setRole(null);
