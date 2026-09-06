@@ -6238,7 +6238,12 @@ export default function Home() {
         setUser(current);
         if (current) {
           const profile = await getDoc(doc(db, 'users', current.uid));
-          setRole(profile.exists() ? (profile.data().role as Role) : null);
+          const storedRole = profile.exists() ? profile.data().role : null;
+          if (storedRole === 'admin') {
+            window.location.replace('/admin');
+            return;
+          }
+          setRole(storedRole as Role | null);
         } else setRole(null);
         setReady(true);
       }),
@@ -6297,6 +6302,11 @@ export default function Home() {
       const existingSnap = await getDoc(userRef);
       const data = existingSnap.exists() ? existingSnap.data() : null;
       const existingRole = data?.role as Role | undefined;
+
+      if (data?.role === 'admin') {
+        window.location.assign('/admin');
+        return;
+      }
 
       if (action.mode === 'login') {
         const effectiveRole: Role = existingRole || action.role || 'student';

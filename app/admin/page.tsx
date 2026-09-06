@@ -17,6 +17,8 @@ import {
   LogOut,
   Mail,
   Menu,
+  Pencil,
+  Plus,
   Search,
   ShieldCheck,
   Users,
@@ -24,14 +26,16 @@ import {
 } from 'lucide-react';
 import {
   onAuthStateChanged,
-  sendPasswordResetEmail,
   signInWithEmailAndPassword,
-  signInWithPopup,
   signOut,
   type User,
 } from 'firebase/auth';
 import { collection, doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc, type Timestamp } from 'firebase/firestore';
-import { auth, db, googleProvider } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { SCHOOL_STAGES, SCHOOL_YEARS, type SchoolStage } from '@/lib/malaysia-curriculum';
 import './admin.css';
 
 type AdminTab = 'overview' | 'users' | 'classrooms' | 'subjects' | 'reports';
@@ -67,12 +71,23 @@ type SubjectProposal = {
   status: 'pending' | 'approved' | 'rejected';
   createdAt?: Timestamp;
 };
+type CatalogSubject = {
+  id: string;
+  label: string;
+  normalizedLabel?: string;
+  schoolStage: SchoolStage;
+  schoolYear: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+const ADMIN_EMAIL = 'admin@slearn.my';
 
 const nav: { id: AdminTab; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'users', label: 'Users', icon: Users },
   { id: 'classrooms', label: 'Classrooms', icon: BookOpen },
-  { id: 'subjects', label: 'Subject approvals', icon: CircleAlert },
+  { id: 'subjects', label: 'Subjects', icon: BookOpen },
   { id: 'reports', label: 'Reports', icon: BarChart3 },
 ];
 
@@ -99,7 +114,6 @@ const dateLabel = (value?: Timestamp) => {
 };
 
 function AdminLogin() {
-  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -110,36 +124,9 @@ function AdminLogin() {
     setBusy(true);
     setMessage('');
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      await signInWithEmailAndPassword(auth, ADMIN_EMAIL, password);
     } catch (error) {
       setMessage(friendlyError(error));
-      setBusy(false);
-    }
-  };
-
-  const googleLogin = async () => {
-    setBusy(true);
-    setMessage('');
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (error) {
-      setMessage(friendlyError(error));
-      setBusy(false);
-    }
-  };
-
-  const resetPassword = async () => {
-    if (!email.trim()) {
-      setMessage('Enter your admin email first, then select Forgot password.');
-      return;
-    }
-    setBusy(true);
-    try {
-      await sendPasswordResetEmail(auth, email.trim());
-      setMessage('Password reset email sent. Check your inbox.');
-    } catch (error) {
-      setMessage(friendlyError(error));
-    } finally {
       setBusy(false);
     }
   };
@@ -166,21 +153,18 @@ function AdminLogin() {
           <div>
             <p className="admin-eyebrow">Authorised access only</p>
             <h2>Welcome back</h2>
-            <p>Sign in with an account assigned the admin role.</p>
+            <p>Use the dedicated SLearn administrator account.</p>
           </div>
           <label>
             Email address
-            <span className="admin-field"><Mail /><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@example.com" required /></span>
+            <span className="admin-field admin-fixed-email"><Mail /><input type="email" value={ADMIN_EMAIL} readOnly aria-label="Administrator email" /></span>
           </label>
           <label>
             Password
             <span className="admin-field"><LockKeyhole /><input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" required /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff /> : <Eye />}</button></span>
           </label>
-          <button className="admin-forgot" type="button" onClick={resetPassword}>Forgot password?</button>
           {message && <p className="admin-form-message"><CircleAlert /> {message}</p>}
-          <button className="admin-primary admin-login-button" disabled={busy} type="submit">{busy ? <LoaderCircle className="spin" /> : <ShieldCheck />} Sign in as admin</button>
-          <div className="admin-divider"><span>or</span></div>
-          <button className="admin-google" disabled={busy} type="button" onClick={googleLogin}><span>G</span> Continue with Google</button>
+          <button className="admin-primary admin-login-button" disabled={busy} type="submit">{busy ? <LoaderCircle className="spin" /> : <ShieldCheck />} Sign in</button>
           <Link className="admin-back" href="/">Back to SLearn</Link>
         </form>
       </section>
@@ -211,7 +195,15 @@ export default function AdminPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [classrooms, setClassrooms] = useState<ClassroomRow[]>([]);
   const [subjectProposals, setSubjectProposals] = useState<SubjectProposal[]>([]);
+  const [subjectCatalog, setSubjectCatalog] = useState<CatalogSubject[]>([]);
   const [reviewingSubject, setReviewingSubject] = useState('');
+  const [subjectEditorOpen, setSubjectEditorOpen] = useState(false);
+  const [editingSubject, setEditingSubject] = useState<CatalogSubject | null>(null);
+  const [subjectName, setSubjectName] = useState('');
+  const [subjectStage, setSubjectStage] = useState<SchoolStage>('primary');
+  const [subjectYear, setSubjectYear] = useState(SCHOOL_YEARS.primary[0]);
+  const [savingSubject, setSavingSubject] = useState(false);
+  const [subjectError, setSubjectError] = useState('');
   const [search, setSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [dataError, setDataError] = useState('');
@@ -243,8 +235,45 @@ export default function AdminPage() {
     const stopSubjects = onSnapshot(collection(db, 'subjectProposals'), (snapshot) => {
       setSubjectProposals(snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as SubjectProposal)));
     }, () => setDataError('Subject requests could not be loaded.'));
-    return () => { stopUsers(); stopClasses(); stopSubjects(); };
+    const stopCatalog = onSnapshot(collection(db, 'subjectCatalog'), (snapshot) => {
+      setSubjectCatalog(snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as CatalogSubject)));
+    }, () => setDataError('Subject catalogue could not be loaded.'));
+    return () => { stopUsers(); stopClasses(); stopSubjects(); stopCatalog(); };
   }, [status]);
+
+  const openSubjectEditor = (subject?: CatalogSubject) => {
+    setEditingSubject(subject || null);
+    setSubjectName(subject?.label || '');
+    setSubjectStage(subject?.schoolStage || 'primary');
+    setSubjectYear(subject?.schoolYear || SCHOOL_YEARS.primary[0]);
+    setSubjectError('');
+    setSubjectEditorOpen(true);
+  };
+
+  const saveSubject = async (event: SyntheticEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!user || !subjectName.trim()) return;
+    setSavingSubject(true);
+    setSubjectError('');
+    try {
+      const cleanName = subjectName.trim();
+      const catalogId = editingSubject?.id || `${subjectStage}-${subjectYear}-${cleanName}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 120);
+      await setDoc(doc(db, 'subjectCatalog', catalogId), {
+        label: cleanName,
+        normalizedLabel: cleanName.toLowerCase(),
+        schoolStage: subjectStage,
+        schoolYear: subjectYear,
+        managedBy: user.uid,
+        updatedAt: serverTimestamp(),
+        ...(editingSubject ? {} : { createdAt: serverTimestamp() }),
+      }, { merge: true });
+      setSubjectEditorOpen(false);
+    } catch {
+      setSubjectError('The subject could not be saved. Please try again.');
+    } finally {
+      setSavingSubject(false);
+    }
+  };
 
   const reviewSubject = async (proposal: SubjectProposal, approved: boolean) => {
     if (!user) return;
@@ -337,7 +366,16 @@ export default function AdminPage() {
 
         {tab === 'classrooms' && <section className="admin-panel admin-directory"><DirectoryHead eyebrow={`${classrooms.length} learning spaces`} title="Classroom directory" value={search} onChange={setSearch} placeholder="Search classroom, teacher or code" />{filteredClasses.length ? <div className="admin-class-grid">{filteredClasses.map((item, index) => <article className={`admin-class-card tone-${index % 4}`} key={item.id}><div className="admin-class-top"><span><BookOpen /></span><em>{item.code || 'NO-CODE'}</em></div><small>{item.subject || 'General learning'}</small><h3>{item.name || 'Untitled classroom'}</h3><p>Led by {item.teacherName || 'Teacher'}</p><div className="admin-class-metrics"><span><Users /> {item.students || 0}/{item.maxStudents || 30}</span><b>{item.progress || 0}% progress</b></div><div className="admin-progress"><i style={{ width: `${Math.min(100, item.progress || 0)}%` }} /></div></article>)}</div> : <EmptyState icon={Search} title="No matching classrooms" text="Try another classroom name, teacher or code." />}</section>}
 
-        {tab === 'subjects' && <section className="admin-panel admin-directory"><div className="admin-directory-head"><div><p className="admin-eyebrow">{subjectProposals.filter((item) => item.status === 'pending').length} pending</p><h2>Subject approval requests</h2></div></div><div className="subject-request-list">{subjectProposals.filter((item) => item.status === 'pending').length ? subjectProposals.filter((item) => item.status === 'pending').map((item) => <article className="subject-request-card" key={item.id}><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Requested by {item.requesterName || item.requesterEmail || 'Teacher'} · {dateLabel(item.createdAt)}</p></div><div><button className="subject-reject" disabled={reviewingSubject === item.id} onClick={() => reviewSubject(item, false)}><X /> Reject</button><button className="admin-primary" disabled={reviewingSubject === item.id} onClick={() => reviewSubject(item, true)}>{reviewingSubject === item.id ? <LoaderCircle className="spin" /> : <Check />} Approve</button></div></article>) : <EmptyState icon={Check} title="No pending requests" text="New teacher-submitted subjects will appear here." />}</div></section>}
+        {tab === 'subjects' && <section className="admin-subject-space">
+          <section className="admin-panel admin-subject-catalog">
+            <div className="admin-directory-head"><div><p className="admin-eyebrow">{subjectCatalog.length} custom subjects</p><h2>Subject management</h2></div><button className="admin-primary admin-add-subject" onClick={() => openSubjectEditor()}><Plus /> Add subject</button></div>
+            {subjectCatalog.length ? <div className="admin-subject-grid">{subjectCatalog.slice().sort((a, b) => a.label.localeCompare(b.label)).map((item) => <article className="admin-subject-card" key={item.id}><span><BookOpen /></span><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Available to teachers creating or editing classrooms.</p></div><button onClick={() => openSubjectEditor(item)} aria-label={`Edit ${item.label}`}><Pencil /> Edit</button></article>)}</div> : <EmptyState icon={BookOpen} title="No custom subjects yet" text="Add a subject to make it available to teachers." />}
+          </section>
+          <section className="admin-panel admin-subject-requests">
+            <div className="admin-panel-head"><div><p className="admin-eyebrow">{subjectProposals.filter((item) => item.status === 'pending').length} pending</p><h3>Teacher requests</h3></div></div>
+            <div className="subject-request-list">{subjectProposals.filter((item) => item.status === 'pending').length ? subjectProposals.filter((item) => item.status === 'pending').map((item) => <article className="subject-request-card" key={item.id}><div><small>{item.schoolStage} · {item.schoolYear}</small><h3>{item.label}</h3><p>Requested by {item.requesterName || item.requesterEmail || 'Teacher'} · {dateLabel(item.createdAt)}</p></div><div><button className="subject-reject" disabled={reviewingSubject === item.id} onClick={() => reviewSubject(item, false)}><X /> Reject</button><button className="admin-primary" disabled={reviewingSubject === item.id} onClick={() => reviewSubject(item, true)}>{reviewingSubject === item.id ? <LoaderCircle className="spin" /> : <Check />} Approve</button></div></article>) : <EmptyState icon={Check} title="No pending requests" text="New teacher-submitted subjects will appear here." />}</div>
+          </section>
+        </section>}
 
         {tab === 'reports' && <>
           <section className="admin-report-grid">
@@ -346,6 +384,20 @@ export default function AdminPage() {
             <article className="admin-report-card wide"><div><p className="admin-eyebrow">Learning health</p><h3>Progress across classrooms</h3></div>{classrooms.length ? classrooms.slice().sort((a, b) => (b.progress || 0) - (a.progress || 0)).map((item) => <div className="admin-progress-row" key={item.id}><span>{item.name || 'Untitled classroom'}</span><div className="admin-progress"><i style={{ width: `${Math.min(100, item.progress || 0)}%` }} /></div><b>{item.progress || 0}%</b></div>) : <EmptyState icon={BarChart3} title="No progress data" text="Reports will grow with classroom activity." />}</article>
           </section>
         </>}
+        <Dialog open={subjectEditorOpen} onOpenChange={setSubjectEditorOpen}>
+          <DialogContent className="admin-subject-dialog">
+            <form onSubmit={saveSubject}>
+              <DialogHeader><DialogTitle>{editingSubject ? 'Edit subject' : 'Add a new subject'}</DialogTitle><DialogDescription>This subject will appear in the classroom subject list for the selected school level and year.</DialogDescription></DialogHeader>
+              <div className="admin-subject-form">
+                <label htmlFor="admin-subject-name">Subject name<Input id="admin-subject-name" value={subjectName} onChange={(event) => setSubjectName(event.target.value)} placeholder="e.g. Computer Science" maxLength={80} required /></label>
+                <label htmlFor="admin-subject-stage">School level<select id="admin-subject-stage" value={subjectStage} onChange={(event) => { const stage = event.target.value as SchoolStage; setSubjectStage(stage); setSubjectYear(SCHOOL_YEARS[stage][0]); }}>{SCHOOL_STAGES.map((stage) => <option value={stage.value} key={stage.value}>{stage.label}</option>)}</select></label>
+                <label htmlFor="admin-subject-year">Year / Form<select id="admin-subject-year" value={subjectYear} onChange={(event) => setSubjectYear(event.target.value)}>{SCHOOL_YEARS[subjectStage].map((year) => <option value={year} key={year}>{year}</option>)}</select></label>
+                {subjectError && <p className="admin-form-message"><CircleAlert /> {subjectError}</p>}
+              </div>
+              <DialogFooter><Button variant="outline" type="button" onClick={() => setSubjectEditorOpen(false)} disabled={savingSubject}>Cancel</Button><Button type="submit" disabled={savingSubject || !subjectName.trim()}>{savingSubject ? <LoaderCircle className="spin" /> : <Check />} {editingSubject ? 'Save changes' : 'Add subject'}</Button></DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
       </section>
     </main>
   );
