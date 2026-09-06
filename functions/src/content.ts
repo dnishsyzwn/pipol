@@ -76,7 +76,8 @@ export async function extractMaterial(buffer: Buffer, fileName: string): Promise
     const parsed = await pdfParse(buffer);
     let extractedText = parsed.text.trim();
     let ocrUsed = false;
-    const likelyImageOnly = extractedText.length < Math.max(80, Number(parsed.numpages || 1) * 40);
+    const pageCount = Number((parsed as unknown as { numpages?: number }).numpages || 1);
+    const likelyImageOnly = extractedText.length < Math.max(80, pageCount * 40);
     if (likelyImageOnly) {
       try {
         extractedText = (await extractScannedPdf(buffer)).trim();
