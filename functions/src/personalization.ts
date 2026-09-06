@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { onCall } from 'firebase-functions/v2/https';
+import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { FieldValue } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import { db } from './firebase.js';
-import { providerSecrets } from './config.js';
+import { config, providerSecrets } from './config.js';
 import { requireTeacher, requireAuth, requireClassroomOwner } from './auth.js';
 import { failed, denied } from './errors.js';
 import { generateQuiz } from './provider.js';
 import { GeneratedQuizSchema, removeUndefinedValues, validateQuestionSet } from './schemas.js';
-import { reserveQuota, refundReservation, settleQuota } from './quota.js';
+import { reserveQuota, refundReservation, settleQuota, type QuotaReservation } from './quota.js';
 import { assertGenerationInput } from './safety.js';
 import { planStudent } from './personalization-plan.js';
 
@@ -24,7 +25,7 @@ async function requireExerciseMember(classroomId: string, uid: string) {
   if (!member.exists || (member.get('status') !== undefined && member.get('status') !== 'active')) denied('You are not a member of this classroom.');
 }
 
-export const generatePersonalizedExercise = onCall({ region: 'asia-southeast1', enforceAppCheck: true, secrets: providerSecrets, timeoutSeconds: 540, memory: '1GiB' }, async request => {
+export const generatePersonalizedExercise = onCall({ region: 'asia-southeast1', enforceAppCheck: true, timeoutSeconds: 120 }, async request => {
   const auth = await requireTeacher(request);
   const input = inputSchema.parse(request.data);
   await requireClassroomOwner(input.classroomId, auth.uid);
@@ -47,14 +48,47 @@ export const generatePersonalizedExercise = onCall({ region: 'asia-southeast1', 
   }
   if (Object.values(assignments).includes('shared')) variants.unshift({ key: 'shared', studentId: null, label: 'Shared practice · 60% and above', percentage: null, weakTopics: [], questions: [] });
   if (!variants.length) failed('No students have fully marked results for this exercise yet. Finish marking before personalizing.');
-  const credits = variants.length * input.questionCount;
-  if (input.preview) return { credits, sets: variants.length, students: Object.keys(assignments).length, skipped, focusCount: Math.round(input.questionCount * .7) };
-  const reservation = await reserveQuota(auth.uid, credits, 0);
+  if (variants.length > 400) failed('This classroom exceeds the supported batch size of 400 question sets. Split the classroom into smaller groups.');
+  const questionTotal = variants.length * input.questionCount;
+  const credits = config.personalizedQuotaEnabled ? questionTotal : 0;
+  if (input.preview) return { credits, questionTotal, quotaEnabled: config.personalizedQuotaEnabled, sets: variants.length, students: Object.keys(assignments).length, skipped, focusCount: Math.round(input.questionCount * .7) };
+  const tags = await classroom.collection('tags').limit(100).get();
+  const classroomData = await classroom.get();
+  const previousQuestions = source.get('questions')?.length ? source.get('questions') : submissions.docs.flatMap(s => (s.get('questionResults') || []).map((r: { questionText: string; expectedAnswer: string; topic: string; difficulty: string }) => ({ question: r.questionText, answer: r.expectedAnswer, topic: r.topic, difficulty: r.difficulty })));
+  const ref = db.collection('personalizedDrafts').doc();
+  const lock = db.collection('personalizedGenerationLocks').doc(auth.uid);
+  await db.runTransaction(async tx => {
+    const current = await tx.get(lock);
+    if (Number(current.get('expiresAtMillis') || 0) > Date.now()) failed('Your personalized exercise is already generating. Resume it from saved drafts.');
+    tx.set(lock, { draftId: ref.id, expiresAtMillis: Date.now() + 60 * 60 * 1000 });
+    tx.create(ref, removeUndefinedValues({ ownerId: auth.uid, classroomId: input.classroomId, sourceId: input.sourceId, assignments, variants, skipped, questionCount: input.questionCount, questionType: input.questionType, prompt: input.prompt, subject: String(classroomData.get('subject') || 'General education'), sourceText: JSON.stringify(previousQuestions).slice(0, 60000), sourceSummary: String(source.get('title') || 'Previous exercise'), tags: tags.docs.map(t => ({ id: t.id, kind: String(t.get('kind')), label: String(t.get('label')) })), storageVersion: 2, quotaEnabled: config.personalizedQuotaEnabled, status: 'generating', completedSets: 0, failedSets: 0, totalSets: variants.length, createdAt: FieldValue.serverTimestamp() }));
+    for (const variant of variants) tx.create(ref.collection('generationTasks').doc(variant.key), { key: variant.key, status: 'queued' });
+  });
+  // Separate task documents let Cloud Functions process a class in the background.
+  // Persist each question set separately to avoid Firestore's per-document size limit.
+  return { draftId: ref.id, status: 'generating', credits, skipped };
+});
+
+export const processPersonalizedSet = onDocumentCreated({ region: 'asia-southeast1', document: 'personalizedDrafts/{draftId}/generationTasks/{taskId}', secrets: providerSecrets, timeoutSeconds: 540, memory: '1GiB', maxInstances: 3, concurrency: 1 }, async event => {
+  if (!event.data) return;
+  const taskRef = event.data.ref;
+  const ref = db.collection('personalizedDrafts').doc(event.params.draftId);
+  const claimed = await db.runTransaction(async tx => {
+    const task = await tx.get(taskRef);
+    if (task.get('status') !== 'queued') return false;
+    tx.update(taskRef, { status: 'processing' }); return true;
+  });
+  if (!claimed) return;
+  const draft = await ref.get();
+  const variant = (draft.get('variants') as Variant[]).find(v => v.key === event.params.taskId);
+  if (!variant) return;
+  variant.questions = [];
+  let reservation: QuotaReservation | undefined;
+  let errorMessage = '';
   try {
-    const tags = await classroom.collection('tags').limit(100).get();
-    const classroomData = await classroom.get();
-    const previousQuestions = source.get('questions')?.length ? source.get('questions') : submissions.docs.flatMap(s => (s.get('questionResults') || []).map((r: { questionText: string; expectedAnswer: string; topic: string; difficulty: string }) => ({ question: r.questionText, answer: r.expectedAnswer, topic: r.topic, difficulty: r.difficulty })));
-    for (const variant of variants) {
+    await requireClassroomOwner(draft.get('classroomId'), draft.get('ownerId'));
+    if (draft.get('quotaEnabled')) reservation = await reserveQuota(draft.get('ownerId'), draft.get('questionCount'), 0);
+    const input = { questionCount: Number(draft.get('questionCount')), questionType: String(draft.get('questionType')), prompt: String(draft.get('prompt')) };
       // Separate calls enforce the rounded 70/30 allocation instead of trusting a prose instruction alone.
       const focusCount = variant.studentId ? Math.round(input.questionCount * .7) : 0;
       const portions = [{ count: focusCount, focused: true }, { count: input.questionCount - focusCount, focused: false }];
@@ -62,10 +96,10 @@ export const generatePersonalizedExercise = onCall({ region: 'asia-southeast1', 
         if (!portion.count) continue;
         const generated = GeneratedQuizSchema.parse(await generateQuiz({
           prompt: `Create NEW self-contained practice questions similar in scope to the previous exercise. ${portion.focused ? `Focus ONLY on these weak topic labels: ${JSON.stringify(variant.weakTopics)}. Use these exact topic labels.` : 'Cover the previous exercise topics for reinforcement.'} Include any required statement in the question text. No diagrams, images or external references. Teacher guidance: ${input.prompt}`,
-          sourceText: JSON.stringify(previousQuestions).slice(0, 60000), sourceSummary: String(source.get('title') || 'Previous exercise'),
-          questionCount: portion.count, subject: String(classroomData.get('subject') || 'General education'), language: 'English', difficulty: 'mixed',
+          sourceText: String(draft.get('sourceText')), sourceSummary: String(draft.get('sourceSummary')),
+          questionCount: portion.count, subject: String(draft.get('subject')), language: 'English', difficulty: 'mixed',
           questionTypes: [input.questionType], learningObjectives: [], imageMode: 'none', imageCount: 0,
-          existingTags: tags.docs.map(t => ({ id: t.id, kind: String(t.get('kind')), label: String(t.get('label')) })),
+          existingTags: draft.get('tags'),
         }));
         if (generated.questions.length !== portion.count) failed('AI returned an incomplete set. Please generate again.');
         for (const q of validateQuestionSet(generated.questions)) {
@@ -74,17 +108,28 @@ export const generatePersonalizedExercise = onCall({ region: 'asia-southeast1', 
           variant.questions.push(questionSchema.parse({ ...q, id: randomUUID(), answer: q.correctAnswer, points: 2, markingMode: 'automatic' }));
         }
       }
-    }
-    const ref = db.collection('personalizedDrafts').doc();
-    await ref.set(removeUndefinedValues({ ownerId: auth.uid, classroomId: input.classroomId, sourceId: input.sourceId, assignments, variants, skipped, questionCount: input.questionCount, status: 'draft', createdAt: FieldValue.serverTimestamp() }));
-    await settleQuota(reservation, credits, 0);
-    return { draftId: ref.id, variants, credits, skipped };
-  } catch (error) { await refundReservation(reservation); throw error; }
+    await ref.collection('sets').doc(variant.key).set(removeUndefinedValues(variant));
+    if (reservation) await settleQuota(reservation, input.questionCount, 0);
+  } catch (error) {
+    if (reservation) await refundReservation(reservation);
+    errorMessage = error instanceof Error ? error.message.slice(0, 1000) : 'Generation failed. Please retry this draft.';
+  }
+  await db.runTransaction(async tx => {
+    const current = await tx.get(ref);
+    const lock = db.collection('personalizedGenerationLocks').doc(draft.get('ownerId'));
+    const lockSnapshot = await tx.get(lock);
+    const completedSets = Number(current.get('completedSets') || 0) + 1;
+    const failedSets = Number(current.get('failedSets') || 0) + (errorMessage ? 1 : 0);
+    const done = completedSets === current.get('totalSets');
+    tx.update(taskRef, { status: errorMessage ? 'failed' : 'ready', error: errorMessage });
+    tx.update(ref, { completedSets, failedSets, status: done ? (failedSets ? 'failed' : 'draft') : 'generating', ...(errorMessage ? { error: errorMessage } : {}) });
+    if (done && lockSnapshot.get('draftId') === ref.id) tx.set(lock, { draftId: ref.id, expiresAtMillis: 0 });
+  });
 });
 
 export const publishPersonalizedExercise = onCall({ region: 'asia-southeast1', enforceAppCheck: true }, async request => {
   const auth = await requireTeacher(request);
-  const input = z.object({ draftId: id, title: z.string().trim().min(1).max(300), deadline: z.string().max(100).nullable(), allowLateSubmissions: z.boolean(), saveOnly: z.boolean().default(false), variants: z.array(z.object({ key: id, questions: z.array(questionSchema).min(2).max(15) })).min(1).max(15) }).parse(request.data);
+  const input = z.object({ draftId: id, title: z.string().trim().min(1).max(300), deadline: z.string().max(100).nullable(), allowLateSubmissions: z.boolean(), saveOnly: z.boolean().default(false), variants: z.array(z.object({ key: id, questions: z.array(questionSchema).min(2).max(15) })).min(1).max(400) }).parse(request.data);
   if (input.deadline && !Number.isFinite(Date.parse(input.deadline))) failed('Enter a valid deadline.');
   const ref = db.collection('personalizedDrafts').doc(input.draftId);
   const draft = await ref.get();
@@ -102,7 +147,8 @@ export const publishPersonalizedExercise = onCall({ region: 'asia-southeast1', e
   await db.runTransaction(async tx => {
     const current = await tx.get(ref);
     if (current.get('status') !== 'draft') failed('This draft has already been published.');
-    tx.update(ref, { variants, title: input.title, deadline: input.deadline, allowLateSubmissions: input.allowLateSubmissions, status: input.saveOnly ? 'draft' : 'published', exerciseId: exerciseRef.id });
+    if (draft.get('storageVersion') === 2) for (const variant of variants) tx.set(ref.collection('sets').doc(variant.key), variant);
+    tx.update(ref, { variants: draft.get('storageVersion') === 2 ? variants.map(v => ({ ...v, questions: [] })) : variants, title: input.title, deadline: input.deadline, allowLateSubmissions: input.allowLateSubmissions, status: input.saveOnly ? 'draft' : 'published', exerciseId: exerciseRef.id });
     if (input.saveOnly) return;
     tx.create(exerciseRef, { title: input.title, deadline: input.deadline, allowLateSubmissions: input.allowLateSubmissions, personalized: true, personalizedDraftId: ref.id, sourceExerciseId: draft.get('sourceId'), teacherId: auth.uid, questionCount: draft.get('questionCount'), questions: [], enhanced: true, createdAt: FieldValue.serverTimestamp() });
   });
@@ -118,7 +164,8 @@ export const getPersonalizedQuestions = onCall({ region: 'asia-southeast1', enfo
   if (!teacher) await requireExerciseMember(input.classroomId, auth.uid);
   const draft = await db.collection('personalizedDrafts').doc(exercise.get('personalizedDraftId')).get();
   const variants = draft.get('variants') as Variant[];
-  const variant = teacher ? variants[0] : variants.find(v => v.key === draft.get('assignments')?.[auth.uid]);
+  let variant = teacher ? variants[0] : variants.find(v => v.key === draft.get('assignments')?.[auth.uid]);
+  if (variant && draft.get('storageVersion') === 2) variant = (await draft.ref.collection('sets').doc(variant.key).get()).data() as Variant;
   if (!variant) failed('Your previous exercise needs a completed, fully marked result. Ask your teacher for an assigned exercise.');
   return { questions: variant.questions.map(q => teacher ? q : { ...q, answer: '' }) };
 });
@@ -133,7 +180,8 @@ export const submitPersonalizedExercise = onCall({ region: 'asia-southeast1', en
   const isLate = Boolean(exercise.get('deadline') && Date.now() > Date.parse(exercise.get('deadline')));
   if (isLate && !exercise.get('allowLateSubmissions')) failed('The exercise deadline has passed.');
   const draft = await db.collection('personalizedDrafts').doc(exercise.get('personalizedDraftId')).get();
-  const variant = (draft.get('variants') as Variant[]).find(v => v.key === draft.get('assignments')?.[auth.uid]);
+  let variant = (draft.get('variants') as Variant[]).find(v => v.key === draft.get('assignments')?.[auth.uid]);
+  if (variant && draft.get('storageVersion') === 2) variant = (await draft.ref.collection('sets').doc(variant.key).get()).data() as Variant;
   if (!variant) denied('No exercise assigned to you.');
   const questionResults = variant.questions.map((q, i) => {
     const answer = (input.answers[String(i)] || '').trim();

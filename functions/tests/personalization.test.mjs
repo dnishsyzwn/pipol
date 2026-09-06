@@ -21,9 +21,10 @@ process.env.FIREBASE_CONFIG = JSON.stringify({ projectId: 'demo-personalization'
 process.env.VERTEX_AI_API_KEY = 'test-only-not-a-real-key';
 const { db, adminAuth } = await import('../lib/firebase.js');
 const api = await import('../lib/personalization.js');
+const { config } = await import('../lib/config.js');
 const { mock } = await import('node:test');
 let store;
-const snap = path => ({ id: path.split('/').at(-1), exists: store.has(path), ref: doc(path), get: key => store.get(path)?.[key], data: () => store.get(path) });
+const snap = path => ({ id: path.split('/').at(-1), exists: store.has(path), ref: doc(path), get: key => structuredClone(store.get(path)?.[key]), data: () => structuredClone(store.get(path)) });
 const doc = path => ({ path, id: path.split('/').at(-1), get: async () => snap(path), collection: name => col(`${path}/${name}`), set: async (data, options) => store.set(path, options?.merge ? { ...store.get(path), ...data } : data), update: async data => store.set(path, { ...store.get(path), ...data }) });
 const col = (path, filters = []) => ({ doc: (name = crypto.randomUUID()) => doc(`${path}/${name}`), where: (field, op, value) => col(path, [...filters, [field, value]]), limit: () => col(path, filters), get: async () => ({ docs: [...store.keys()].filter(k => k.startsWith(`${path}/`) && k.split('/').length === path.split('/').length + 1 && filters.every(([field,value]) => store.get(k)[field] === value)).map(snap) }) });
 mock.method(db, 'collection', col);
@@ -43,6 +44,7 @@ mock.method(globalThis, 'fetch', async (_url, options) => {
 });
 const req = (data, uid = 'teacher') => ({ data, auth: { uid, token: { name: uid } } });
 function fixture() {
+  config.personalizedQuotaEnabled = false;
   store = new Map(); calls = [];
   store.set('users/teacher', { role: 'teacher' });
   store.set('classrooms/class', { teacherId: 'teacher', subject: 'Mathematics' });
@@ -52,14 +54,27 @@ function fixture() {
     if (mark !== null) store.set(`classrooms/class/exercises/previous/submissions/${uid}`, { studentId: uid, studentName: uid, questionResults: [{ topic: 'Algebra', pointsPossible: 10, pointsEarned: mark }] });
   }
 }
+async function finishJobs(generated) {
+  const tasks = (await col(`personalizedDrafts/${generated.draftId}/generationTasks`).get()).docs;
+  for (const task of tasks) await api.processPersonalizedSet.run({ data: task, params: { draftId: generated.draftId, taskId: task.id } });
+  generated.variants = (await col(`personalizedDrafts/${generated.draftId}/sets`).get()).docs.map(d => d.data());
+  return generated;
+}
 test('AI generation, draft review, shared/private delivery and server marking', async () => {
   fixture();
   const input = { classroomId: 'class', sourceId: 'previous', questionCount: 5, questionType: 'multiple_choice' };
   const preview = await api.generatePersonalizedExercise.run(req({ ...input, preview: true }));
-  assert.equal(preview.credits, 10); assert.equal(preview.students, 3); assert.equal(preview.skipped.length, 1); assert.equal(calls.length, 0);
+  assert.equal(preview.credits, 0); assert.equal(preview.quotaEnabled, false); assert.equal(preview.students, 3); assert.equal(preview.skipped.length, 1); assert.equal(calls.length, 0);
   const generated = await api.generatePersonalizedExercise.run(req(input));
+  assert.equal(calls.length, 0);
+  assert.equal(store.get(`personalizedDrafts/${generated.draftId}`).status, 'generating');
+  await assert.rejects(() => api.generatePersonalizedExercise.run(req(input)), /already generating/);
+  await finishJobs(generated);
   assert.deepEqual(calls.map(c => c.settings.questionCount), [5,4,1]);
-  assert.equal(store.get('usage/teacher').questionsUsed, 10);
+  assert.equal(store.has('usage/teacher'), false);
+  const callCount = calls.length;
+  await finishJobs(generated);
+  assert.equal(calls.length, callCount, 'duplicate trigger does not call AI twice');
   assert.equal(store.get(`personalizedDrafts/${generated.draftId}`).status, 'draft');
   const publish = { draftId: generated.draftId, title: 'Practice', deadline: null, allowLateSubmissions: true, variants: generated.variants };
   await api.publishPersonalizedExercise.run(req({ ...publish, saveOnly: true }));
@@ -77,28 +92,39 @@ test('AI generation, draft review, shared/private delivery and server marking', 
   assert.equal(result.score, 2); assert.equal(result.totalPoints, 10); assert.equal(result.totalCorrect, 1);
   await assert.rejects(() => api.submitPersonalizedExercise.run(req({ ...target, answers: {} }, 'weak')), /already submitted/);
 });
-test('quota limits apply before any AI call; other teachers cannot use a classroom', async () => {
+test('personalization can generate beyond 15 questions with an exhausted normal quota', async () => {
   fixture();
-  await assert.rejects(() => api.generatePersonalizedExercise.run(req({ classroomId: 'class', sourceId: 'previous', questionCount: 10 })), /20 question credits/);
-  assert.equal(calls.length, 0);
+  store.set('usage/teacher', { questionsUsed: 15, imagesUsed: 5 });
+  const generated = await finishJobs(await api.generatePersonalizedExercise.run(req({ classroomId: 'class', sourceId: 'previous', questionCount: 10 })));
+  assert.equal(generated.variants.flatMap(v => v.questions).length, 20);
+  assert.deepEqual(store.get('usage/teacher'), { questionsUsed: 15, imagesUsed: 5 });
   store.set('users/intruder', { role: 'teacher' });
   await assert.rejects(() => api.generatePersonalizedExercise.run(req({ classroomId: 'class', sourceId: 'previous', questionCount: 5 }, 'intruder')), /do not own/);
 });
 test('manual answers stay pending until teacher marking and cannot be used for personalization', async () => {
   fixture();
-  const generated = await api.generatePersonalizedExercise.run(req({ classroomId: 'class', sourceId: 'previous', questionCount: 2 }));
+  const generated = await finishJobs(await api.generatePersonalizedExercise.run(req({ classroomId: 'class', sourceId: 'previous', questionCount: 2 })));
   const variants = generated.variants.map(v => ({ ...v, questions: v.questions.map(q => ({ ...q, markingMode: 'manual' })) }));
   await api.publishPersonalizedExercise.run(req({ draftId: generated.draftId, title: 'Manual practice', deadline: null, allowLateSubmissions: true, variants }));
   const result = await api.submitPersonalizedExercise.run(req({ classroomId: 'class', exerciseId: generated.draftId, answers: { 0: '2', 1: '2' } }, 'weak'));
   assert.equal(result.score, 0); assert.ok(result.questionResults.every(r => r.pendingReview));
   assert.equal(planStudent(result.questionResults, 2), null);
 });
-test('invalid AI output refunds the reservation and saves no draft', async () => {
+test('future quota enforcement is opt-in and workers stop before exceeding it', async () => {
+  fixture(); config.personalizedQuotaEnabled = true;
+  const generated = await finishJobs(await api.generatePersonalizedExercise.run(req({ classroomId: 'class', sourceId: 'previous', questionCount: 10 })));
+  assert.equal(store.get('usage/teacher').questionsUsed, 10);
+  assert.equal(store.get(`personalizedDrafts/${generated.draftId}`).status, 'failed');
+  assert.equal(calls.length, 1);
+});
+test('invalid AI output refunds optional reservations and marks the background draft failed', async () => {
   fixture();
+  config.personalizedQuotaEnabled = true;
   const fetchMock = mock.method(globalThis, 'fetch', async () => ({ ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify({ questions: [] }) }] } }] }) }));
   try {
-    await assert.rejects(() => api.generatePersonalizedExercise.run(req({ classroomId: 'class', sourceId: 'previous', questionCount: 2 })));
+    const generated = await finishJobs(await api.generatePersonalizedExercise.run(req({ classroomId: 'class', sourceId: 'previous', questionCount: 2 })));
     assert.equal(store.get('usage/teacher').questionsUsed, 0);
-    assert.equal([...store.keys()].some(k => k.startsWith('personalizedDrafts/')), false);
+    assert.equal(generated.variants.length, 0);
+    assert.equal(store.get(`personalizedDrafts/${generated.draftId}`).status, 'failed');
   } finally { fetchMock.mock.restore(); }
 });

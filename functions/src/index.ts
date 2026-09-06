@@ -28,7 +28,7 @@ import { refundReservation, reserveQuota, resetQuota, settleQuota, type QuotaRes
 import type { QuizQuestion } from './types.js';
 
 setGlobalOptions({ region: 'asia-southeast1', maxInstances: 10, enforceAppCheck: true });
-export { generatePersonalizedExercise, publishPersonalizedExercise, getPersonalizedQuestions, submitPersonalizedExercise } from './personalization.js';
+export { generatePersonalizedExercise, processPersonalizedSet, publishPersonalizedExercise, getPersonalizedQuestions, submitPersonalizedExercise } from './personalization.js';
 
 export const adminUpdateUserRole = onCall(async (request) => {
   const admin = await requireAdmin(request);

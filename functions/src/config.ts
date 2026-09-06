@@ -33,6 +33,8 @@ export const config = {
   dryRun: process.env.AI_DRY_RUN === 'true',
   quotaPeriod: process.env.QUOTA_PERIOD === 'daily' ? 'daily' : 'monthly',
   questionQuota: numberEnv('QUESTION_QUOTA', 15),
+  // Personalized practice is quota-free unless explicitly enabled by an operator.
+  personalizedQuotaEnabled: process.env.PERSONALIZED_QUOTA_ENABLED === 'true',
   imageQuota: numberEnv('IMAGE_QUOTA', 5),
   maxDocumentBytes: numberEnv('MAX_DOCUMENT_BYTES', 25 * 1024 * 1024),
   maxDocumentChars: numberEnv('MAX_DOCUMENT_CHARS', 120_000),

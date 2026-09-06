@@ -137,6 +137,10 @@ service cloud.firestore {
     match /personalizedDrafts/{draftId} {
       allow read: if signedIn() && resource.data.ownerId == request.auth.uid;
       allow write: if false;
+      match /{collectionName}/{itemId} {
+        allow read: if signedIn() && get(/databases/$(database)/documents/personalizedDrafts/$(draftId)).data.ownerId == request.auth.uid;
+        allow write: if false;
+      }
     }
 
     match /quizJobs/{jobId} {
